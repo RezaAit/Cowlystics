@@ -159,6 +159,11 @@ function calcQurbaniEstimate(
 // Gemini estimates at 480+ kg are actually in the 570-620 kg range (verified),
 // while cattle estimated at 350-479 kg tend to be slightly overestimated.
 // A smooth interpolation would lose this distinction.
+//
+// SMALL CATTLE NOTE (calibrated from real data — 260 kg compact dark Local Cross):
+// Gemini's "dark coat +15-20%" rule causes it to overshoot compact small cattle.
+// Real example: actual 260 kg → Gemini raw ~300 kg mid → need ×0.90-0.93 to correct.
+// We apply a graduated downward nudge for rawMid < 350 (non-Friesian only).
 function getCombinedFactor(breed: string, rawMid: number): number {
   // Friesian Cross: Gemini massively underestimates dairy body frames.
   // RMF 198 (620kg Friesian): Gemini says 360-420 → need ×1.55
@@ -172,10 +177,12 @@ function getCombinedFactor(breed: string, rawMid: number): number {
   // RMF 775 (440kg): Gemini says 420-490 → need ×0.96
   // RMF 741 (570kg): Gemini says 500-560 → need ×1.00 (already accurate)
   // RMF 733 (600kg): Gemini says 520-580 → need ×1.02
-  // Small/medium cattle: Gemini accurate with new prompt → ×1.00
   if (rawMid >= 480) return 1.02; // Very large (570-620kg range) — slight upward
   if (rawMid >= 350) return 0.96; // Large (370-480kg) — prompt overshoots, correct down
-  return 1.00;                    // Small/medium — prompt accurate
+  // Small/compact cattle: dark coat inflation rule causes Gemini to overshoot.
+  // Real verified: actual 260 kg → Gemini raw ~300 kg → ×0.90 gives ~270 kg (good bracket)
+  if (rawMid >= 250) return 0.93; // Medium-small (250-349kg raw) — modest downward fix
+  return 0.90;                    // Very small (<250kg raw) — stronger downward fix
 }
 
 function calibrateWeight(
@@ -372,16 +379,17 @@ Identify breed as exactly ONE of:
 Visually assess: body length, chest depth, belly girth, leg thickness, muscle mass.
 
 CRITICAL:
-- Dark cattle (black/dark grey) appear smaller in photos — estimate 15-20% heavier than you think
+- Dark cattle (black/dark grey) with LARGE frame (big chest, thick legs, wide belly) — estimate 8-12% heavier than you think
+- Dark cattle with COMPACT/SMALL frame — apply NO dark coat adjustment. Judge purely on body size.
 - Friesian cattle are MUCH heavier than their side profile suggests — minimum 420 kg if visually large
 - Animal next to adult human and looks large → 380 kg+
-- Do NOT give conservative estimates. Aim for the CENTER of your belief range.
+- Do NOT blindly inflate for dark coat. Only inflate if body mass clearly justifies it.
 - Range must span 40-80 kg minimum.
 
 REFERENCE WEIGHTS (real BD cattle):
-176 kg (small desi) | 235 kg (avg desi) | 295 kg (medium cross) |
-390 kg (large cross) | 440 kg (big cross) | 570 kg (very large) |
-600 kg (exceptional) | 620 kg (Friesian — looks lighter than it is)
+176 kg (small desi) | 235 kg (avg desi) | 260 kg (compact dark Local Cross — do NOT inflate for dark coat) |
+295 kg (medium cross) | 390 kg (large cross) | 440 kg (big cross) |
+570 kg (very large) | 600 kg (exceptional) | 620 kg (Friesian — looks lighter than it is)
 
 === BODY CONDITION ===
 Choose exactly ONE:
