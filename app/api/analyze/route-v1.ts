@@ -5,9 +5,6 @@ import { NextResponse } from "next/server";
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Live rate ৳/kg — online platform premium prices
-// NOTE: Only the 5 breeds the active Gemini prompt can output are listed here.
-// Other breed strings (Sahiwal Cross, Brahman Cross, etc.) were part of an older
-// prompt and are no longer emitted. Fallback: ?? MARKET_RATES["Local Cross"].
 const MARKET_RATES: Record<string, { min: number; max: number }> = {
   "Local":               { min: 490, max: 515 },
   "Local Cross":         { min: 490, max: 540 },
@@ -49,8 +46,8 @@ const QURBANI_BREED_MULTIPLIER: Record<string, number> = {
 };
 
 // Color & beauty multiplier — detected by Gemini from image
-// "premium" = solid black / solid red / beautiful hump & horns
-// "standard" = mixed/spotted/ordinary
+// "premium_appearance" = solid black / solid red / beautiful hump & horns
+// "standard_appearance" = mixed/spotted/ordinary
 const QURBANI_BEAUTY_MULTIPLIER: Record<string, number> = {
   "premium":  1.10, // Solid jet black, solid dark red, beautiful hump+horns
   "standard": 1.00, // Mixed color, spotted, regular
@@ -94,17 +91,17 @@ function calcQurbaniEstimate(
 ): QurbaniEstimate {
   const basePricePerKg  = getQurbaniBasePricePerKg(weightMid);
   const baseValue       = weightMid * basePricePerKg;
-  const breedMult       = QURBANI_BREED_MULTIPLIER[breed]       ?? 1.05;
-  const beautyMult      = QURBANI_BEAUTY_MULTIPLIER[appearance]  ?? 1.00;
+  const breedMult       = QURBANI_BREED_MULTIPLIER[breed]    ?? 1.05;
+  const beautyMult      = QURBANI_BEAUTY_MULTIPLIER[appearance] ?? 1.00;
   const healthMult      = QURBANI_HEALTH_MULTIPLIER[bodyCondition] ?? 1.00;
   const subtotal        = baseValue * breedMult * beautyMult * healthMult;
   const eidPremium      = getEidPremium(weightMid);
   const rawFinal        = subtotal + eidPremium;
 
   // Round to nearest 500
-  const finalPrice    = Math.round(rawFinal / 500) * 500;
-  const priceRangeMin = Math.round(finalPrice * 0.95 / 500) * 500;
-  const priceRangeMax = Math.round(finalPrice * 1.05 / 500) * 500;
+  const finalPrice      = Math.round(rawFinal / 500) * 500;
+  const priceRangeMin   = Math.round(finalPrice * 0.95 / 500) * 500;
+  const priceRangeMax   = Math.round(finalPrice * 1.05 / 500) * 500;
 
   // Build Bengali explanation
   const breedLabel: Record<string, string> = {
@@ -153,12 +150,6 @@ function calcQurbaniEstimate(
 // Per-breed correction with new prompt:
 //   Local / Local Cross / Local Large Cross / Premium: ~5-10% under → 1.05-1.10
 //   Friesian Cross: still ~20-25% under (dairy body illusion) → 1.20-1.25
-//
-// BOUNDARY NOTE: There is an intentional step at rawMid=480 where the factor
-// jumps from 0.96 → 1.02. This reflects real calibration data: cattle that
-// Gemini estimates at 480+ kg are actually in the 570-620 kg range (verified),
-// while cattle estimated at 350-479 kg tend to be slightly overestimated.
-// A smooth interpolation would lose this distinction.
 function getCombinedFactor(breed: string, rawMid: number): number {
   // Friesian Cross: Gemini massively underestimates dairy body frames.
   // RMF 198 (620kg Friesian): Gemini says 360-420 → need ×1.55
@@ -205,9 +196,9 @@ function calibrateWeight(
   if (sellerClaim && sellerClaim > calMax) {
     const overageRatio = sellerClaim / calMax;
     if (overageRatio <= 1.35) {
-      const calMid     = (calMin + calMax) / 2;
-      const blendedMid = Math.round((calMid * 0.65 + sellerClaim * 0.35) / 10) * 10;
-      const halfRange  = Math.round((calMax - calMin) / 2 / 10) * 10;
+      const calMid      = (calMin + calMax) / 2;
+      const blendedMid  = Math.round((calMid * 0.65 + sellerClaim * 0.35) / 10) * 10;
+      const halfRange   = Math.round((calMax - calMin) / 2 / 10) * 10;
       finalMin = blendedMid - halfRange;
       finalMax = blendedMid + halfRange;
       note = "বিক্রেতার দাবি বিবেচনায় সংশোধিত অনুমান";
@@ -216,14 +207,10 @@ function calibrateWeight(
     }
   }
 
-  // Clamp mid to [finalMin, finalMax] to prevent drift from rounding
-  const rawComputedMid = Math.round((finalMin + finalMax) / 2 / 5) * 5;
-  const mid = Math.max(finalMin, Math.min(finalMax, rawComputedMid));
-
   return {
     min: finalMin,
     max: finalMax,
-    mid,
+    mid: Math.round((finalMin + finalMax) / 2 / 5) * 5,
     note,
     calibrationFactor: Math.round(factor * 100) / 100,
   };
@@ -301,23 +288,15 @@ function getWeightCategory(kg: number): string {
   return "Exceptional (অসাধারণ)";
 }
 
-// FIX: Fraud check now takes BOTH price baselines — live-rate and Qurbani market.
-// We use the higher of the two so a fair Qurbani-season seller price doesn't
-// falsely trigger a MEDIUM or HIGH fraud warning.
 function calcFraudRisk(
-  sellerWeight:    number | undefined,
-  calibratedMax:   number,
-  sellerPrice:     number | undefined,
-  liveRatePriceMax: number,
-  qurbaniPriceMax:  number
+  sellerWeight: number | undefined,
+  calibratedMax: number,
+  sellerPrice: number | undefined,
+  priceMax: number
 ): { risk: "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN"; warning: string } {
   if (!sellerWeight) return { risk: "UNKNOWN", warning: "" };
-
   const wRatio = sellerWeight / calibratedMax;
-
-  // Use the more generous price ceiling — Qurbani or live-rate, whichever is higher
-  const effectivePriceMax = Math.max(liveRatePriceMax, qurbaniPriceMax);
-  const pRatio = sellerPrice ? sellerPrice / effectivePriceMax : 1;
+  const pRatio = sellerPrice ? sellerPrice / priceMax : 1;
 
   if (wRatio > 1.35 || pRatio > 1.45) {
     return {
@@ -335,18 +314,10 @@ function calcFraudRisk(
 }
 
 function getValueVerdict(costPerKgMeat: number, breed: string, weightCategory: string): string {
-  // Friesian: dairy breed has lower dressing rate; judge value differently
   if (breed === "Friesian Cross" && costPerKgMeat < 1150)
     return "Friesian Cross — মাংসের অনুপাত কম, কিন্তু প্রতি কেজির দাম ঠিক আছে।";
-
-  // Local/desi cattle: emotionally premium for Qurbani, small size = higher cost/kg is expected
-  if (breed === "Local")
-    return "দেশি গরু — কোরবানিতে স্বাদ ও ঐতিহ্যের কারণে প্রিমিয়াম মূল্য স্বাভাবিক।";
-
-  // Small non-Local cattle where cost/kg is high
   if (weightCategory.startsWith("Small") && costPerKgMeat > 1300)
     return "ছোট গরুতে প্রতি কেজি মাংসের খরচ বেশি — কিন্তু স্বাদ ভালো ও একা কেনা সুবিধাজনক।";
-
   if (costPerKgMeat < 1100) return "প্রতি কেজি মাংসের হিসেবে এটি চমৎকার মূল্য।";
   if (costPerKgMeat < 1250) return "মূল্য বাজার গড়ের মধ্যে আছে।";
   if (costPerKgMeat < 1400) return "মূল্য কিছুটা বেশি — দর কষুন।";
@@ -355,7 +326,7 @@ function getValueVerdict(costPerKgMeat: number, breed: string, weightCategory: s
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 6 — GEMINI PROMPT
-// Detects: breed, weight, body condition, coat color, hump quality, appearance
+// Updated to also detect: coat color, hump quality, horn appearance
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const GEMINI_PROMPT = `You are an expert Bangladeshi cattle evaluator with 20 years of experience at qurbani markets. Analyze the cattle image and return structured data.
@@ -459,9 +430,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const geminiData = await geminiRes.json();
-    const rawText    = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
-    const cleaned    = rawText.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+    const geminiData  = await geminiRes.json();
+    const rawText     = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+    const cleaned     = rawText.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
 
     let ai: {
       estimated_weight?:    string;
@@ -489,7 +460,6 @@ export async function POST(req: Request) {
     const validBreeds = ["Local", "Local Cross", "Local Large Cross", "Friesian Cross", "Premium Cross"];
     const breed: string = validBreeds.includes(ai.breed ?? "") ? (ai.breed as string) : "Local Cross";
 
-    // weight_min floor: 100 kg. weight_max must be at least rawMin + 40 kg.
     const rawMin: number = Math.max(100, ai.weight_min ?? 250);
     const rawMax: number = Math.max(rawMin + 40, ai.weight_max ?? rawMin + 60);
 
@@ -505,12 +475,12 @@ export async function POST(req: Request) {
     const { min: weightMin, max: weightMax, mid: weightMid } = calibrated;
 
     // ── Step 4: Calibrated market estimate (live rate model) ──────────────────
-    const rate           = MARKET_RATES[breed] ?? MARKET_RATES["Local Cross"];
-    const dressing       = DRESSING_RATES[breed] ?? 0.42;
-    const meatYieldKg    = parseFloat((weightMid * dressing).toFixed(1));
-    const priceMin       = Math.round((weightMid * rate.min) / 1000) * 1000;
-    const priceMax       = Math.round((weightMid * rate.max) / 1000) * 1000;
-    const avgPrice       = (priceMin + priceMax) / 2;
+    const rate          = MARKET_RATES[breed] ?? MARKET_RATES["Local Cross"];
+    const dressing      = DRESSING_RATES[breed] ?? 0.42;
+    const meatYieldKg   = parseFloat((weightMid * dressing).toFixed(1));
+    const priceMin      = Math.round((weightMid * rate.min) / 1000) * 1000;
+    const priceMax      = Math.round((weightMid * rate.max) / 1000) * 1000;
+    const avgPrice      = (priceMin + priceMax) / 2;
     const pricePerKgLive = Math.round(avgPrice / weightMid);
     const costPerKgMeat  = Math.round(avgPrice / meatYieldKg);
     const weightCategory = getWeightCategory(weightMid);
@@ -523,13 +493,8 @@ export async function POST(req: Request) {
     const confidence = calculateConfidence(rawMin, rawMax, calibrated, breed, seller_claimed_weight);
 
     // ── Step 7: Fraud detection ───────────────────────────────────────────────
-    // FIX: Pass both price ceilings so Qurbani-season pricing doesn't false-alarm.
     const { risk: fraudRisk, warning: fraudWarning } = calcFraudRisk(
-      seller_claimed_weight,
-      weightMax,
-      seller_claimed_price,
-      priceMax,                   // live-rate ceiling
-      qurbani.price_range_max     // Qurbani-market ceiling
+      seller_claimed_weight, weightMax, seller_claimed_price, priceMax
     );
 
     // ── Response ──────────────────────────────────────────────────────────────
@@ -547,14 +512,14 @@ export async function POST(req: Request) {
       body_condition:    bodyCondition,
       coat_color:        ai.coat_color ?? "Unknown",
       hump_quality:      ai.hump_quality ?? "moderate",
-      appearance,
+      appearance:        appearance,
 
       // ── Confidence ───────────────────────────────────────────────────────────
       confidence:        confidence.label,
       confidence_score:  confidence.score,
       confidence_band:   confidence.band,
 
-      // ── Top-level fields — backward compatible with existing page.tsx ─────────
+      // ── Top-level fields — backward compatible with existing page.tsx ──────────
       meat_yield:        `${meatYieldKg} কেজি`,
       meat_yield_kg:     meatYieldKg,
       dressing_rate:     dressing,
@@ -565,21 +530,21 @@ export async function POST(req: Request) {
       cost_per_kg_meat:  costPerKgMeat,
       value_verdict:     valueVerdict,
 
-      // ── Estimate A: Calibrated Live Rate Model (our real data) ──────────────
+      // ── Estimate A: Calibrated Live Rate Model (our real data) ───────────────
       estimate_a: {
-        label:             "ক্যালিব্রেটেড বাজার মূল্য (Real Data)",
-        meat_yield:        `${meatYieldKg} কেজি`,
-        meat_yield_kg:     meatYieldKg,
-        dressing_rate:     dressing,
-        price_range:       `৳${priceMin.toLocaleString()} – ৳${priceMax.toLocaleString()}`,
-        price_min:         priceMin,
-        price_max:         priceMax,
+        label:           "ক্যালিব্রেটেড বাজার মূল্য (Real Data)",
+        meat_yield:      `${meatYieldKg} কেজি`,
+        meat_yield_kg:   meatYieldKg,
+        dressing_rate:   dressing,
+        price_range:     `৳${priceMin.toLocaleString()} – ৳${priceMax.toLocaleString()}`,
+        price_min:       priceMin,
+        price_max:       priceMax,
         price_per_kg_live: pricePerKgLive,
         cost_per_kg_meat:  costPerKgMeat,
-        value_verdict:     valueVerdict,
+        value_verdict:   valueVerdict,
       },
 
-      // ── Estimate B: Qurbani Market Formula (2026 seasonal pricing) ──────────
+      // ── Estimate B: Qurbani Market Formula (2026 seasonal pricing) ───────────
       estimate_b: {
         label:               "কোরবানির হাটের বাজার মূল্য (২০২৬)",
         base_price_per_kg:   qurbani.base_price_per_kg,
@@ -603,17 +568,15 @@ export async function POST(req: Request) {
       seller_claimed_weight: seller_claimed_weight ?? undefined,
       seller_claimed_price:  seller_claimed_price ?? undefined,
 
-      // ── Debug (strip or gate behind NODE_ENV check before production) ────────
-      ...(process.env.NODE_ENV !== "production" && {
-        _debug: {
-          ai_raw_min:         rawMin,
-          ai_raw_max:         rawMax,
-          ai_visual_conf:     ai.visual_confidence,
-          calibration_factor: calibrated.calibrationFactor,
-          calibration_note:   `Raw: ${rawMin}-${rawMax}kg → Calibrated: ${weightMin}-${weightMax}kg (×${calibrated.calibrationFactor})`,
-          qurbani_formula:    `Base ৳${qurbani.base_price_per_kg}/kg × ${qurbani.breed_multiplier} (breed) × ${qurbani.beauty_multiplier} (beauty) × ${qurbani.health_multiplier} (health) + ৳${qurbani.eid_premium} Eid = ৳${qurbani.final_price}`,
-        },
-      }),
+      // ── Debug ────────────────────────────────────────────────────────────────
+      _debug: {
+        ai_raw_min:         rawMin,
+        ai_raw_max:         rawMax,
+        ai_visual_conf:     ai.visual_confidence,
+        calibration_factor: calibrated.calibrationFactor,
+        calibration_note:   `Raw: ${rawMin}-${rawMax}kg → Calibrated: ${weightMin}-${weightMax}kg (×${calibrated.calibrationFactor})`,
+        qurbani_formula:    `Base ৳${qurbani.base_price_per_kg}/kg × ${qurbani.breed_multiplier} (breed) × ${qurbani.beauty_multiplier} (beauty) × ${qurbani.health_multiplier} (health) + ৳${qurbani.eid_premium} Eid = ৳${qurbani.final_price}`,
+      },
     });
 
   } catch (err) {
