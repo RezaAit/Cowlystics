@@ -15,6 +15,9 @@ interface EstimateB {
   price_range_min:     number;
   price_range_max:     number;
   price_range:         string;
+  cost_per_kg_meat:    number;
+  cost_per_kg_meat_min?: number;
+  cost_per_kg_meat_max?: number;
   appearance_detected: string;
   explanation_bn:      string;
 }
@@ -229,12 +232,13 @@ function compressThumb(dataUrl: string): Promise<string> {
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
-      const scale  = 80 / img.width;
-      canvas.width  = 80;
-      canvas.height = img.height * scale;
+      const maxW   = 600;
+      const scale  = img.width > maxW ? maxW / img.width : 1;
+      canvas.width  = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL("image/jpeg", 0.5));
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
     };
     img.onerror = () => resolve(dataUrl.slice(0, 200)); // fallback
     img.src = dataUrl;
@@ -276,208 +280,199 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 async function downloadShareCard(result: AnalysisResult, cattleDataUrl: string): Promise<void> {
+  // ── Canvas setup: 1200×630 (Facebook OG optimal) ─────────────────
   const W = 1200, H = 630;
   const canvas = document.createElement("canvas");
-  canvas.width  = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d")!;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
 
-  // ── Background ────────────────────────────────────────────────────
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#050A0E");
-  bg.addColorStop(1, "#0A1A12");
-  ctx.fillStyle = bg;
+  // ── 1. Solid dark background ──────────────────────────────────────
+  ctx.fillStyle = "#06080B";
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle green glow top-right
-  const glow = ctx.createRadialGradient(W, 0, 0, W, 0, 600);
-  glow.addColorStop(0, "rgba(16,185,129,0.12)");
+  // ── 2. RIGHT: cowly.png — full height, no opacity reduction ───────
+  //    Anchored to right edge, fills full card height
+  const RIGHT_W = 480;  // how much of the right side cowly.png occupies
+  try {
+    const cowlyImg = await loadImage("/cowly.png");
+    const imgH = H;
+    const imgW = (cowlyImg.width / cowlyImg.height) * imgH;
+    const imgX = W - imgW + (imgW - RIGHT_W) * 0.1; // anchor right, slight bleed left
+    // Draw full opacity — no globalAlpha
+    ctx.drawImage(cowlyImg, imgX, 0, imgW, imgH);
+  } catch { /* no cowly.png */ }
+
+  // Gradient overlay: fade cowly.png into dark on the left side
+  // So info text is readable but cowly is vivid on the far right
+  const fadeGrad = ctx.createLinearGradient(0, 0, W, 0);
+  fadeGrad.addColorStop(0,    "#06080B");
+  fadeGrad.addColorStop(0.36, "#06080B");
+  fadeGrad.addColorStop(0.55, "rgba(6,8,11,0.92)");
+  fadeGrad.addColorStop(0.72, "rgba(6,8,11,0.55)");
+  fadeGrad.addColorStop(1,    "rgba(6,8,11,0.10)");
+  ctx.fillStyle = fadeGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle green glow — top left corner only
+  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 420);
+  glow.addColorStop(0, "rgba(16,185,129,0.13)");
   glow.addColorStop(1, "transparent");
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
 
-  // ── LEFT PANEL — cattle photo (contain-fit, full animal) ──────────
-  const panelX = 36, panelY = 36;
-  const panelW = 530, panelH = H - 72;
+  // ── 3. LEFT: cattle photo — square panel, left-anchored ──────────
+  const PX = 24, PY = 24, PW = 420, PH = H - 48;
 
-  // Card bg
-  ctx.fillStyle = "rgba(255,255,255,0.025)";
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 18);
-  ctx.fill();
+  // Subtle card bg
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.fill();
 
   try {
     const cowImg = await loadImage(cattleDataUrl);
-    // CONTAIN: whole animal fits, no cropping
-    const scale = Math.min((panelW - 20) / cowImg.width, (panelH - 20) / cowImg.height);
-    const dw = cowImg.width  * scale;
-    const dh = cowImg.height * scale;
-    const dx = panelX + (panelW - dw) / 2;
-    const dy = panelY + (panelH - dh) / 2;
+    const scale  = Math.min((PW - 16) / cowImg.width, (PH - 16) / cowImg.height);
+    const dw = cowImg.width * scale, dh = cowImg.height * scale;
+    const dx = PX + (PW - dw) / 2, dy = PY + (PH - dh) / 2;
     ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(panelX, panelY, panelW, panelH, 18);
-    ctx.clip();
+    ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.clip();
     ctx.drawImage(cowImg, dx, dy, dw, dh);
     ctx.restore();
-  } catch { /* dark panel fallback */ }
+  } catch { /* dark panel */ }
 
-  // Panel border
-  ctx.strokeStyle = "rgba(16,185,129,0.3)";
-  ctx.lineWidth   = 1.5;
-  ctx.beginPath();
-  ctx.roundRect(panelX, panelY, panelW, panelH, 18);
-  ctx.stroke();
+  // Border
+  ctx.strokeStyle = "rgba(16,185,129,0.4)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.stroke();
 
-  // ── RIGHT PANEL ───────────────────────────────────────────────────
-  const rx = 598;
-  const rw = W - rx - 36;
-  let   ry = 42;
+  // ── 4. INFO column: right of cattle photo, left of cowly ─────────
+  const IX = PX + PW + 24;   // info start x
+  const IW = 680 - IX + PX;  // info width (~280px) — fits between photo & cowly
+  let   IY = 32;
 
-  // ── HEADER: logo.png (compact icon, 48px tall) ────────────────────
+  ctx.textAlign = "left";
+
+  // ── Logo ──────────────────────────────────────────────────────────
   let logoLoaded = false;
   try {
     const logoImg = await loadImage("/logo.png");
-    const lh      = 48;
-    const lw      = (logoImg.width / logoImg.height) * lh;
-    ctx.drawImage(logoImg, rx, ry, lw, lh);
-    logoLoaded = true;
-    ry += lh + 8;
-  } catch { /* fallback below */ }
-
+    const lh = 44, lw = (logoImg.width / logoImg.height) * lh;
+    ctx.drawImage(logoImg, IX, IY, lw, lh);
+    logoLoaded = true; IY += lh + 8;
+  } catch {}
   if (!logoLoaded) {
-    ctx.font      = "bold 28px 'Segoe UI', Arial, sans-serif";
+    ctx.font = "bold 22px 'Segoe UI',Arial,sans-serif";
     ctx.fillStyle = "#10B981";
-    ctx.textAlign = "left";
-    ctx.fillText("🐄 Cowlytics", rx, ry + 24);
-    ry += 36;
+    ctx.fillText("Cowlytics", IX, IY + 22); IY += 34;
   }
 
-  // Tagline
-  ctx.font      = "12px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#3D5060";
-  ctx.textAlign = "left";
-  ctx.fillText("Qurbani Cattle AI Analyzer · cowlytics.com", rx, ry);
-  ry += 18;
+  // URL tagline
+  ctx.font = "500 11px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(16,185,129,0.65)";
+  ctx.fillText("cowly.ait.net.bd", IX, IY); IY += 11;
 
   // Divider
-  ctx.fillStyle = "rgba(16,185,129,0.2)";
-  ctx.fillRect(rx, ry, rw, 1);
-  ry += 16;
+  ctx.fillStyle = "rgba(16,185,129,0.5)";
+  ctx.fillRect(IX, IY, IW, 1.5); IY += 12;
 
-  // ── Breed + Premium ───────────────────────────────────────────────
-  const breedText = BREED_LABELS[result.breed] ?? result.breed;
-  ctx.font      = "bold 20px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#B0C4CF";
-  ctx.textAlign = "left";
-  ctx.fillText(breedText, rx, ry);
+  // ── Breed ─────────────────────────────────────────────────────────
+  const breedLabel = BREED_LABELS[result.breed] ?? result.breed;
+  ctx.font = "bold 18px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "#D8E6EE";
+  ctx.fillText(breedLabel, IX, IY);
   if (result.appearance === "premium") {
-    const bw = ctx.measureText(breedText).width;
-    ctx.font      = "bold 14px 'Segoe UI', Arial, sans-serif";
+    const bw = ctx.measureText(breedLabel).width;
+    ctx.font = "bold 12px 'Segoe UI',Arial,sans-serif";
     ctx.fillStyle = "#FBBF24";
-    ctx.fillText("  ⭐ Premium", rx + bw, ry);
+    ctx.fillText("  \u2b50 Premium", IX + bw, IY);
   }
-  ry += 16;
-
-  // Body condition
-  ctx.font      = "13px 'Segoe UI', Arial, sans-serif";
+  IY += 13;
+  ctx.font = "11px 'Segoe UI',Arial,sans-serif";
   ctx.fillStyle = "#10B981";
-  ctx.fillText(`● ${result.body_condition}`, rx, ry);
-  ry += 20;
+  ctx.fillText("  " + result.body_condition, IX, IY); IY += 18;
 
   // ── Weight hero ───────────────────────────────────────────────────
-  ctx.font = "bold 58px 'Segoe UI', Arial, sans-serif";
-  const wGrad = ctx.createLinearGradient(rx, 0, rx + rw, 0);
-  wGrad.addColorStop(0, "#FFFFFF");
-  wGrad.addColorStop(1, "#10B981");
+  ctx.font = "bold 52px 'Segoe UI',Arial,sans-serif";
+  const wGrad = ctx.createLinearGradient(IX, 0, IX + IW, 0);
+  wGrad.addColorStop(0, "#FFFFFF"); wGrad.addColorStop(1, "#10B981");
   ctx.fillStyle = wGrad;
-  ctx.fillText(result.estimated_weight, rx, ry + 50);
-  ry += 60;
+  ctx.fillText(result.estimated_weight, IX, IY + 48); IY += 54;
+  ctx.font = "11px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.30)";
+  ctx.fillText("\u0986\u09a8\u09c1\u09ae\u09be\u09a8\u09bf\u0995 \u0993\u099c\u09a8", IX, IY); IY += 16;
 
-  ctx.font      = "13px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#4B6070";
-  ctx.fillText("আনুমানিক ওজন", rx, ry);
-  ry += 20;
-
-  // Divider
-  ctx.fillStyle = "rgba(255,255,255,0.05)";
-  ctx.fillRect(rx, ry, rw, 1);
-  ry += 14;
+  ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(IX, IY, IW, 1); IY += 12;
 
   // ── Meat ──────────────────────────────────────────────────────────
-  ctx.font      = "bold 24px 'Segoe UI', Arial, sans-serif";
+  ctx.font = "bold 22px 'Segoe UI',Arial,sans-serif";
   ctx.fillStyle = "#F59E0B";
-  ctx.fillText(`🥩  ~${Math.round(result.meat_yield_kg)} কেজি মাংস`, rx, ry);
-  ry += 18;
-  ctx.font      = "11px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#3D5060";
-  ctx.fillText(`হাড়-চর্বি বাদে · Dressing ${Math.round(result.dressing_rate * 100)}%`, rx, ry);
-  ry += 18;
+  ctx.fillText("~" + Math.round(result.meat_yield_kg) + " \u0995\u09c7\u099c\u09bf \u09ae\u09be\u0982\u09b8", IX, IY); IY += 13;
+  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.28)";
+  ctx.fillText("\u09b9\u09be\u09dc-\u099a\u09b0\u09cd\u09ac\u09bf \u09ac\u09be\u09a6\u09c7 \u00b7 Dressing " + Math.round(result.dressing_rate * 100) + "%", IX, IY); IY += 16;
 
-  // Divider
-  ctx.fillStyle = "rgba(255,255,255,0.05)";
-  ctx.fillRect(rx, ry, rw, 1);
-  ry += 14;
+  ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(IX, IY, IW, 1); IY += 12;
 
-  // ── Price ─────────────────────────────────────────────────────────
-  const pMin    = (result.estimate_b?.price_range_min ?? result.price_min).toLocaleString();
-  const pMax    = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
-  const priceStr = `৳${pMin} – ৳${pMax}`;
-  ctx.font      = "bold 28px 'Segoe UI', Arial, sans-serif";
-  // shrink if too wide
-  if (ctx.measureText(priceStr).width > rw) ctx.font = "bold 22px 'Segoe UI', Arial, sans-serif";
+  // ── Price pill ────────────────────────────────────────────────────
+  const pMin = (result.estimate_b?.price_range_min ?? result.price_min).toLocaleString();
+  const pMax = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
+  const priceStr = "\u09f3" + pMin + " \u2013 \u09f3" + pMax;
+
+  // pill bg
+  ctx.fillStyle = "rgba(16,185,129,0.12)";
+  ctx.strokeStyle = "rgba(16,185,129,0.35)";
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(IX - 6, IY - 6, IW + 6, 48, 8); ctx.fill(); ctx.stroke();
+
+  ctx.font = "bold 26px 'Segoe UI',Arial,sans-serif";
+  if (ctx.measureText(priceStr).width > IW) ctx.font = "bold 20px 'Segoe UI',Arial,sans-serif";
   ctx.fillStyle = "#10B981";
-  ctx.fillText(priceStr, rx, ry);
-  ry += 16;
-  ctx.font      = "11px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#3D5060";
-  ctx.fillText("কোরবানি হাটের ন্যায্য মূল্য সীমা", rx, ry);
-  ry += 22;
+  ctx.fillText(priceStr, IX, IY + 22); IY += 32;
+  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(16,185,129,0.55)";
+  ctx.fillText("\u0995\u09cb\u09b0\u09ac\u09be\u09a8\u09bf \u09b9\u09be\u099f\u09c7\u09b0 \u09a8\u09cd\u09af\u09be\u09af\u09bc\u09cd\u09af \u09ae\u09c2\u09b2\u09cd\u09af \u09b8\u09c0\u09ae\u09be", IX, IY); IY += 16;
 
-  // ── Confidence — text only (no bar) ──────────────────────────────
+  // ── Confidence ────────────────────────────────────────────────────
   const confColor = result.confidence_score >= 80 ? "#22c55e"
     : result.confidence_score >= 70 ? "#f59e0b" : "#ef4444";
-  ctx.font      = "bold 14px 'Segoe UI', Arial, sans-serif";
+  ctx.font = "bold 12px 'Segoe UI',Arial,sans-serif";
   ctx.fillStyle = confColor;
-  ctx.fillText(`AI নির্ভরযোগ্যতা: ${result.confidence}`, rx, ry);
-  ry += 22;
-
-  // ── Thin confidence bar (contained to rw) ────────────────────────
-  const barH = 5;
-  ctx.fillStyle = "rgba(255,255,255,0.07)";
-  ctx.beginPath(); ctx.roundRect(rx, ry, rw, barH, 3); ctx.fill();
+  ctx.fillText("AI \u09a8\u09bf\u09b0\u09cd\u09ad\u09b0\u09af\u09cb\u0997\u09cd\u09af\u09a4\u09be: " + result.confidence, IX, IY); IY += 10;
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.beginPath(); ctx.roundRect(IX, IY, IW, 4, 2); ctx.fill();
   ctx.fillStyle = confColor;
-  ctx.beginPath(); ctx.roundRect(rx, ry, rw * (result.confidence_score / 100), barH, 3); ctx.fill();
-  ry += barH + 16;
+  ctx.beginPath(); ctx.roundRect(IX, IY, IW * (result.confidence_score / 100), 4, 2); ctx.fill();
+  IY += 14;
 
-  // ── Disclaimer (right panel, above watermark) ─────────────────────
-  ctx.font      = "10px 'Segoe UI', Arial, sans-serif";
-  ctx.fillStyle = "#2A3A44";
-  ctx.fillText("* AI অনুমান ভিত্তিক। চূড়ান্ত সিদ্ধান্তে বিশেষজ্ঞের পরামর্শ নিন।", rx, H - 56);
-
-  // ── Bottom watermark: cowly.png (right side, 100px tall) ──────────
-  try {
-    const cowlyImg = await loadImage("/cowly.png");
-    const wh       = 100;
-    const ww       = (cowlyImg.width / cowlyImg.height) * wh;
-    ctx.globalAlpha = 0.75;
-    ctx.drawImage(cowlyImg, W - ww - 30, H - wh - 20, ww, wh);
-    ctx.globalAlpha = 1;
-  } catch {
-    // fallback text watermark
-    ctx.font      = "bold 12px 'Segoe UI', Arial, sans-serif";
-    ctx.fillStyle = "rgba(16,185,129,0.35)";
-    ctx.textAlign = "right";
-    ctx.fillText("cowlytics.com", W - 28, H - 24);
-    ctx.textAlign = "left";
+  // cost/kg
+  const cpkm = result.estimate_b?.cost_per_kg_meat ?? 0;
+  if (cpkm) {
+    ctx.font = "11px 'Segoe UI',Arial,sans-serif";
+    ctx.fillStyle = "rgba(245,158,11,0.75)";
+    ctx.fillText("\u09ae\u09be\u0982\u09b8 \u0996\u09b0\u099a: \u09f3" + cpkm.toLocaleString() + "/\u0995\u09c7\u099c\u09bf", IX, IY);
   }
 
+  // ── Bottom strip ──────────────────────────────────────────────────
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(0, H - 38, W, 38);
+  ctx.fillStyle = "rgba(16,185,129,0.45)";
+  ctx.fillRect(0, H - 38, W, 1.5);
+
+  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  ctx.textAlign = "left";
+  ctx.fillText("* AI \u0985\u09a8\u09c1\u09ae\u09be\u09a8 \u09ad\u09bf\u09a4\u09cd\u09a4\u09bf\u0995\u0964 \u099a\u09c2\u09dc\u09be\u09a8\u09cd\u09a4 \u09b8\u09bf\u09a6\u09cd\u09a7\u09be\u09a8\u09cd\u09a4\u09c7 \u09ac\u09bf\u09b6\u09c7\u09b7\u099c\u09cd\u099e\u09c7\u09b0 \u09aa\u09b0\u09be\u09ae\u09b0\u09cd\u09b6 \u09a8\u09bf\u09a8\u0964", 24, H - 12);
+  ctx.font = "bold 11px 'Segoe UI',Arial,sans-serif";
+  ctx.fillStyle = "rgba(16,185,129,0.55)";
+  ctx.textAlign = "right";
+  ctx.fillText("cowly.ait.net.bd", W - 20, H - 12);
+  ctx.textAlign = "left";
+
   // ── Download ──────────────────────────────────────────────────────
-  const link    = document.createElement("a");
-  link.download = `cowlytics-${Date.now()}.jpg`;
-  link.href     = canvas.toDataURL("image/jpeg", 0.93);
+  const link = document.createElement("a");
+  link.download = "cowlytics-" + Date.now() + ".jpg";
+  link.href = canvas.toDataURL("image/jpeg", 0.95);
   link.click();
 }
+
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -501,6 +496,9 @@ export default function Home() {
 
   // Share
   const [shareLoading, setShareLoading] = useState(false);
+  // Track if current result was loaded from history (no live image available for share card)
+  const [resultFromHistory, setResultFromHistory] = useState(false);
+  const [historyThumb, setHistoryThumb]           = useState<string>("");
 
   const fileInputRef    = useRef<HTMLInputElement>(null);  // camera
   const galleryInputRef = useRef<HTMLInputElement>(null);  // gallery/multiple
@@ -530,6 +528,7 @@ export default function Home() {
     );
     setImages(prev => [...prev, ...newImages].slice(0, MAX_IMAGES));
     setResult(null);
+    setResultFromHistory(false);
   };
 
   const removeImage = (idx: number) => {
@@ -551,9 +550,8 @@ export default function Home() {
   const handleAnalyze = async () => {
     if (!images.length) return;
 
-    // Premium users bypass the free limit
-    const premStatus = await getPremiumStatus().catch(() => ({ active: false }));
-    if (!premStatus.active) {
+    // Premium users bypass the free limit — use cached state, avoid extra DB round-trip
+    if (!isPremium) {
       const currentCount = await getUsageCount().catch(() => 0);
       if (currentCount >= FREE_LIMIT) {
         setShowPaywall(true);
@@ -575,6 +573,8 @@ export default function Home() {
       });
       const data: AnalysisResult = await res.json();
       setResult(data);
+     setHistoryThumb("");
+      setResultFromHistory(false);
 
       if (!data.error) {
         // Increment usage
@@ -604,11 +604,12 @@ export default function Home() {
   };
 
   const handleShare = async () => {
-    if (!result || !images[0]) return;
+    if (!result) return;
+    const cardImageUrl = images[0]?.dataUrl || historyThumb || "";
     setShareLoading(true);
     try {
       // Step 1: Download the share card image
-      await downloadShareCard(result, images[0].dataUrl);
+      await downloadShareCard(result, cardImageUrl);
 
       // Step 2: Small delay so download starts, then open Facebook share dialog
       await new Promise(r => setTimeout(r, 800));
@@ -619,7 +620,7 @@ export default function Home() {
       const priceMax  = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
       const meatKg    = Math.round(result.meat_yield_kg);
       const shareText = `🐄 Cowlytics AI বিশ্লেষণ\n\nজাত: ${breed}\nওজন: ${result.estimated_weight}\nমাংস: ~${meatKg} কেজি\nমূল্য: ৳${priceMin} – ৳${priceMax}\n\nগরু কিনুন বুঝে-শুনে 👇`;
-      const shareUrl  = "https://cowlytics.com"; // আপনার real URL
+      const shareUrl  = "https://cowly.ait.net.bd";
 
       // Facebook sharer — opens in popup
       const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(shareText)}`;
@@ -637,6 +638,7 @@ export default function Home() {
     setImages([]);
     setSellerWeight("");
     setSellerPrice("");
+    setResultFromHistory(false);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -917,6 +919,12 @@ export default function Home() {
         {result && !result.error && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
+            {resultFromHistory && historyThumb && (
+              <div style={{ borderRadius: 16, overflow: "hidden", border: "1px solid rgba(255,255,255,0.08)", aspectRatio: "16/9", background: "#0a1520" }}>
+                <img src={historyThumb} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+              </div>
+            )}
+
             {(result.image_count ?? 1) > 1 && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", borderRadius: 10, padding: "8px 14px" }}>
                 <span style={{ fontSize: 14 }}>📸</span>
@@ -996,10 +1004,12 @@ export default function Home() {
                     </div>
                     <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "10px 0" }} />
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                      <MiniStat label="ভিত্তি মূল্য"  value={`৳${result.estimate_b.base_price_per_kg}/কেজি`} />
-                      <MiniStat label="ঈদ প্রিমিয়াম" value={`৳${result.estimate_b.eid_premium.toLocaleString()}`} />
-                      <MiniStat label="জাত গুণক"      value={`×${result.estimate_b.breed_multiplier}`} />
-                      <MiniStat label="সৌন্দর্য"       value={result.estimate_b.appearance_detected === "premium" ? "⭐ প্রিমিয়াম" : "সাধারণ"} />
+                      <MiniStat label="ভিত্তি মূল্য"     value={`৳${result.estimate_b.base_price_per_kg}/কেজি`} />
+                      <MiniStat label="ঈদ প্রিমিয়াম"    value={`৳${result.estimate_b.eid_premium.toLocaleString()}`} />
+                      <MiniStat label="জাত রেট"           value={`৳${result.estimate_b.breed_multiplier}/কেজি`} />
+                      <MiniStat label="সৌন্দর্য"           value={result.estimate_b.appearance_detected === "premium" ? "⭐ প্রিমিয়াম" : "সাধারণ"} />
+                      <MiniStat label="স্বাস্থ্য অ্যাডার" value={result.estimate_b.health_multiplier !== 0 ? `${result.estimate_b.health_multiplier > 0 ? "+" : ""}${result.estimate_b.health_multiplier} ৳/কেজি` : "—"} />
+                      <MiniStat label="মাংস/কেজি খরচ"    value={`৳${result.estimate_b.cost_per_kg_meat.toLocaleString()}`} color="#F59E0B" />
                     </div>
                     <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "10px 0" }} />
                     <p style={{ fontSize: 12, color: "#6B7E8A", margin: 0, lineHeight: 1.5 }}>{result.estimate_b.explanation_bn}</p>
@@ -1064,11 +1074,19 @@ export default function Home() {
             {/* Bargaining tip */}
             <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: "14px 18px" }}>
               <p style={{ fontSize: 11, color: "#6B7E8A", margin: "0 0 7px", textTransform: "uppercase", letterSpacing: "0.08em" }}>দর কষাকষির পরামর্শ</p>
-              <p style={{ fontSize: 12, color: "#A0ADB5", margin: 0, lineHeight: 1.6 }}>
-                শুরু করুন <span style={{ color: "#10B981", fontWeight: 600 }}>৳{(result.estimate_b?.price_range_min ?? result.price_min).toLocaleString()}</span> থেকে।
-                সর্বোচ্চ <span style={{ color: "#E8EDF2", fontWeight: 600 }}>৳{(result.estimate_b?.price_range_max ?? result.price_max).toLocaleString()}</span> পর্যন্ত দিতে পারেন।
-                প্রতি কেজি মাংসের প্রকৃত খরচ <span style={{ color: "#F59E0B", fontWeight: 600 }}>৳{result.cost_per_kg_meat}</span>।
-              </p>
+              {(() => {
+                const useQurbani = activeTab === "qurbani" && result.estimate_b;
+                const priceMin = useQurbani ? result.estimate_b!.price_range_min : result.price_min;
+                const priceMax = useQurbani ? result.estimate_b!.price_range_max : result.price_max;
+                const meatCost = useQurbani ? result.estimate_b!.cost_per_kg_meat : result.cost_per_kg_meat;
+                return (
+                  <p style={{ fontSize: 12, color: "#A0ADB5", margin: 0, lineHeight: 1.6 }}>
+                    শুরু করুন <span style={{ color: "#10B981", fontWeight: 600 }}>৳{priceMin.toLocaleString()}</span> থেকে।
+                    সর্বোচ্চ <span style={{ color: "#E8EDF2", fontWeight: 600 }}>৳{priceMax.toLocaleString()}</span> পর্যন্ত দিতে পারেন।
+                    প্রতি কেজি মাংসের প্রকৃত খরচ <span style={{ color: "#F59E0B", fontWeight: 600 }}>৳{meatCost.toLocaleString()}</span>।
+                  </p>
+                );
+              })()}
             </div>
 
             <p style={{ fontSize: 10, color: "#3D4D57", textAlign: "center", margin: "2px 0 0", lineHeight: 1.5 }}>
@@ -1081,29 +1099,31 @@ export default function Home() {
             <div style={{ background: "rgba(24,119,242,0.06)", border: "1px solid rgba(24,119,242,0.25)", borderRadius: 16, padding: "14px 16px" }}>
               <p style={{ fontSize: 11, color: "#4A90F5", fontWeight: 700, margin: "0 0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>📤 Facebook শেয়ার</p>
               <p style={{ fontSize: 11, color: "#6B7E8A", margin: "0 0 12px", lineHeight: 1.5 }}>
-                ① কার্ড ডাউনলোড হবে → ② Facebook খুলবে → ③ ছবি attach করে post করুন
+                {resultFromHistory
+                  ? "ইতিহাস থেকে লোড করা ফলাফল — শেয়ারের জন্য নতুন বিশ্লেষণ করুন।"
+                  : "① কার্ড ডাউনলোড হবে → ② Facebook খুলবে → ③ ছবি attach করে post করুন"}
               </p>
               <button
                 onClick={handleShare}
-                disabled={shareLoading}
+                disabled={shareLoading || (!images[0] && !historyThumb)}
                 style={{
                   width: "100%", padding: "13px", borderRadius: 12,
                   border: "none",
-                  cursor: shareLoading ? "wait" : "pointer",
+                  cursor: shareLoading || (!images[0] && !historyThumb) ? "not-allowed" : "pointer",
                   fontSize: 15, fontWeight: 700,
-                  background: shareLoading
+                  background: shareLoading || (!images[0] && !historyThumb)
                     ? "rgba(24,119,242,0.3)"
                     : "linear-gradient(135deg, #1877F2, #0a5dc2)",
                   color: "#fff",
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                  boxShadow: shareLoading ? "none" : "0 4px 16px rgba(24,119,242,0.35)",
+                  boxShadow: shareLoading || (!images[0] && !historyThumb) ? "none" : "0 4px 16px rgba(24,119,242,0.35)",
                   transition: "all 0.2s",
+                  opacity: !images[0] && !historyThumb ? 0.5 : 1,
                 }}
               >
                 {shareLoading ? (
                   <>
                     <div style={{ width: 16, height: 16, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
-                    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
                     কার্ড তৈরি হচ্ছে...
                   </>
                 ) : (
@@ -1241,37 +1261,96 @@ export default function Home() {
             </div>
 
             {history.length === 0 ? (
-              <p style={{ textAlign: "center", color: "#6B7E8A", fontSize: 13, padding: "20px" }}>কোনো বিশ্লেষণ নেই</p>
+              <p style={{ color: "#6B7E8A", fontSize: 13, padding: "0 20px" }}>
+                এখনো কোনো বিশ্লেষণ সংরক্ষিত নেই।
+              </p>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                {history.map((entry) => (
-                  <div
-                    key={entry.id}
-                    onClick={() => { setResult(entry.result); setShowHistory(false); window.scrollTo({ top: 0 }); }}
-                    style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", cursor: "pointer", background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.04)", transition: "background 0.15s" }}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {history.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setResult(item.result);
+                      setResultFromHistory(true);
+                      setHistoryThumb(item.thumbUrl || "");
+                      setShowHistory(false);
+
+                      window.scrollTo({
+                        top: 0,
+                        behavior: "smooth",
+                      });
+                    }}
+                    style={{
+                      width: "100%",
+                      background: "transparent",
+                      border: "none",
+                      padding: "0 20px 12px",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
                   >
-                    {/* Thumb */}
-                    {entry.thumbUrl ? (
-                      <img src={entry.thumbUrl} alt="thumb" style={{ width: 54, height: 54, borderRadius: 10, objectFit: "cover", border: "1px solid rgba(255,255,255,0.1)", flexShrink: 0 }} />
-                    ) : (
-                      <div style={{ width: 54, height: 54, borderRadius: 10, background: "rgba(16,185,129,0.1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>🐄</div>
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ fontSize: 13, fontWeight: 700, color: "#E8EDF2", margin: "0 0 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {BREED_LABELS[entry.breed] ?? entry.breed}
-                      </p>
-                      <p style={{ fontSize: 12, color: "#6B7E8A", margin: "0 0 2px" }}>{entry.weightMid} কেজি · ৳{entry.priceMin.toLocaleString()}–{entry.priceMax.toLocaleString()}</p>
-                      <p style={{ fontSize: 10, color: "#3D4D57", margin: 0 }}>
-                        {new Date(entry.date).toLocaleDateString("bn-BD", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
-                      </p>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 12,
+                        background: "rgba(255,255,255,0.03)",
+                        border: "1px solid rgba(255,255,255,0.06)",
+                        borderRadius: 16,
+                        padding: 12,
+                      }}
+                    >
+                      <img
+                        src={item.thumbUrl}
+                        alt=""
+                        style={{
+                          width: 72,
+                          height: 72,
+                          objectFit: "cover",
+                          borderRadius: 12,
+                          flexShrink: 0,
+                          background: "#111",
+                        }}
+                      />
+
+                      <div style={{ flex: 1 }}>
+                        <p
+                          style={{
+                            fontSize: 14,
+                            fontWeight: 700,
+                            color: "#E8EDF2",
+                            margin: "0 0 6px",
+                          }}
+                        >
+                          {BREED_LABELS[item.breed] ?? item.breed}
+                        </p>
+
+                        <p
+                          style={{
+                            fontSize: 12,
+                            color: "#A0ADB5",
+                            margin: "0 0 4px",
+                          }}
+                        >
+                          ⚖️ {item.weightMid} কেজি
+                        </p>
+
+                        <p
+                          style={{
+                            fontSize: 13,
+                            color: "#10B981",
+                            fontWeight: 700,
+                            margin: 0,
+                          }}
+                        >
+                          ৳{item.priceMin.toLocaleString()} – ৳{item.priceMax.toLocaleString()}
+                        </p>
+                      </div>
                     </div>
-                    <span style={{ fontSize: 18, color: "#3D4D57" }}>›</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
-
-            <button
+                                <button
               onClick={() => setShowHistory(false)}
               style={{ display: "block", width: "calc(100% - 40px)", margin: "16px 20px 0", padding: "12px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.1)", background: "transparent", color: "#6B7E8A", fontSize: 14, cursor: "pointer" }}
             >

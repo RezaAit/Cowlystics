@@ -6,27 +6,27 @@ import { NextResponse } from "next/server";
 // ═══════════════════════════════════════════════════════
 
 const MARKET_RATES: Record<string, { min: number; max: number }> = {
-  "Local":               { min: 500, max: 535 },
-  "Local Cross":         { min: 490, max: 530 },
-  "Local Large Cross":   { min: 490, max: 540 },
-  "Friesian Cross":      { min: 480, max: 500 },
-  "Sahiwal Cross":       { min: 505, max: 540 },
-  "Brahman Cross":       { min: 500, max: 535 },
-  "Sindhi Cross":        { min: 495, max: 530 },
-  "Premium Cross":       { min: 505, max: 540 },
-  "Unknown Cross":       { min: 490, max: 525 },
+  "Local":               { min: 440, max: 480 },
+  "Local Cross":         { min: 450, max: 500 },
+  "Local Large Cross":   { min: 460, max: 510 },
+  "Friesian Cross":      { min: 430, max: 470 },
+  "Sahiwal Cross":       { min: 470, max: 520 },
+  "Brahman Cross":       { min: 470, max: 520 },
+  "Sindhi Cross":        { min: 460, max: 510 },
+  "Premium Cross":       { min: 490, max: 540 },
+  "Unknown Cross":       { min: 440, max: 490 },
 };
 
 const DRESSING_RATES: Record<string, number> = {
-  "Local":               0.40,
-  "Local Cross":         0.43,
-  "Local Large Cross":   0.44,
-  "Friesian Cross":      0.40,
-  "Sahiwal Cross":       0.46,
-  "Brahman Cross":       0.45,
-  "Sindhi Cross":        0.44,
-  "Premium Cross":       0.46,
-  "Unknown Cross":       0.42,
+  "Local":               0.42,   // net meat (হাড়-চর্বি বাদে) — real BD slaughter data
+  "Local Cross":         0.45,
+  "Local Large Cross":   0.46,
+  "Friesian Cross":      0.41,   // dairy frame → slightly more fat/bone
+  "Sahiwal Cross":       0.47,
+  "Brahman Cross":       0.46,
+  "Sindhi Cross":        0.45,
+  "Premium Cross":       0.47,
+  "Unknown Cross":       0.43,
 };
 
 // ═══════════════════════════════════════════════════════
@@ -35,26 +35,30 @@ const DRESSING_RATES: Record<string, number> = {
 // ═══════════════════════════════════════════════════════
 
 const QURBANI_BASE_RATE: Record<string, { min: number; max: number }> = {
-  "Local":               { min: 505, max: 540 },
-  "Local Cross":         { min: 495, max: 530 },
-  "Local Large Cross":   { min: 490, max: 535 },
-  "Friesian Cross":      { min: 480, max: 500 },
-  "Sahiwal Cross":       { min: 505, max: 540 },
-  "Brahman Cross":       { min: 500, max: 535 },
-  "Sindhi Cross":        { min: 495, max: 530 },
-  "Premium Cross":       { min: 505, max: 540 },
-  "Unknown Cross":       { min: 490, max: 520 },
+  "Local":               { min: 505, max: 545 },
+  "Local Cross":         { min: 500, max: 540 },
+  "Local Large Cross":   { min: 495, max: 540 },
+  "Friesian Cross":      { min: 480, max: 505 },
+  "Sahiwal Cross":       { min: 515, max: 555 },
+  "Brahman Cross":       { min: 515, max: 555 },
+  "Sindhi Cross":        { min: 505, max: 545 },
+  "Premium Cross":       { min: 515, max: 560 },
+  "Unknown Cross":       { min: 490, max: 525 },
 };
-const BEAUTY_ADDER: Record<string, number> = { "premium": 20, "standard": 0 };
+const BEAUTY_ADDER: Record<string, number> = { "premium": 10, "standard": 0 };
 const HEALTH_ADDER: Record<string, number> = {
-  "Excellent Heavy": 10, "Good Muscular": 5, "Moderate": 0, "Thin": -15,
+  "Excellent Heavy": 8,
+  "Good Muscular": 4,
+  "Moderate": 0,
+  "Thin": -12,
 };
 function getEidPremium(weightKg: number): number {
   if (weightKg <= 200) return 0;
-  if (weightKg <= 300) return 6000;
-  if (weightKg <= 400) return 10000;
-  if (weightKg <= 500) return 13000;
-  return 15000;
+  if (weightKg <= 300) return 3000;
+  if (weightKg <= 400) return 5000;
+  if (weightKg <= 500) return 7000;
+  if (weightKg <= 650) return 10000;
+  return 12000;
 }
 
 interface QurbaniEstimate {
@@ -78,19 +82,63 @@ function calcQurbaniEstimate(
   bodyCondition: string,
   appearance:    string
 ): QurbaniEstimate {
+  const dressingRate = DRESSING_RATES[breed] ?? 0.42;
+  const meatYieldKg  = weightMid * dressingRate;
+
+  // ── Live-weight base prices ───────────────────────────
   const baseRates    = QURBANI_BASE_RATE[breed] ?? QURBANI_BASE_RATE["Unknown Cross"];
   const beautyAdder  = BEAUTY_ADDER[appearance]    ?? 0;
   const healthAdder  = HEALTH_ADDER[bodyCondition] ?? 0;
   const adder        = beautyAdder + healthAdder;
-  const effectiveMin = Math.min(baseRates.min + adder, 545);
-  const effectiveMax = Math.min(baseRates.max + adder, 545);
-  const priceMin     = Math.round((weightMid * effectiveMin) / 500) * 500;
-  const priceMax     = Math.round((weightMid * effectiveMax) / 500) * 500;
-  const midPrice     = (priceMin + priceMax) / 2;
-  const eidPremium   = getEidPremium(weightMid);
-  const finalPrice   = Math.round((midPrice + eidPremium) / 500) * 500;
+  // Separate caps: effectiveMin ceiling < effectiveMax ceiling
+  // This guarantees priceMin < priceMax and a real spread is shown in the UI.
+  // Previously both used cap=550, so when both hit the cap they collapsed to the same value.
+  const rawMin       = baseRates.min + adder;
+  const rawMax       = baseRates.max + adder;
+  const CAP_MIN      = 560;  // lower ceiling keeps spread on min side
+  const CAP_MAX      = 620;  // higher ceiling lets max stay above min
+  const effectiveMin = Math.min(rawMin, CAP_MIN);
+  // Force at least ⟳20/kg spread so priceMin never equals priceMax
+  const effectiveMax = Math.max(Math.min(rawMax, CAP_MAX), effectiveMin + 20);
+
+  let priceMin  = Math.round((weightMid * effectiveMin) / 500) * 500;
+  let priceMax  = Math.round((weightMid * effectiveMax) / 500) * 500;
+
+  // Small cattle correction
+  if (weightMid < 220) {
+    priceMin -= 5000;
+    priceMax -= 5000;
+  }
+
+  // Large cattle premium
+  if (weightMid > 550) {
+    priceMin += 5000;
+    priceMax += 5000;
+  }
+
+  const eidPremium = getEidPremium(weightMid);
+
+  // ── Meat-rate cap: costPerKgMeat must be ≤ 1050 ৳ ───
+  // Max allowable total (live price + eid premium) so that
+  //   totalPrice / meatYieldKg  ≤  QURBANI_MEAT_MAX (1175)
+  const maxAllowedTotal = QURBANI_MEAT_MAX * meatYieldKg;
+
+  // Use Math.floor (not round) to guarantee strict ≤ 1050
+  if (priceMax + eidPremium > maxAllowedTotal) {
+    priceMax = Math.floor((maxAllowedTotal - eidPremium) / 500) * 500;
+  }
+  if (priceMin + eidPremium > maxAllowedTotal) {
+    priceMin = Math.floor((maxAllowedTotal - eidPremium) / 500) * 500;
+  }
+  // Keep priceMin <= priceMax, but always maintain at least 500 spread
+  if (priceMin >= priceMax) priceMin = Math.max(0, priceMax - 10000);
+
+  const midPrice      = (priceMin + priceMax) / 2;
+  const finalPrice    = Math.round((midPrice + eidPremium) / 500) * 500;
   const priceRangeMin = Math.round((priceMin + eidPremium) / 500) * 500;
   const priceRangeMax = Math.round((priceMax + eidPremium) / 500) * 500;
+
+  // ── Labels ───────────────────────────────────────────
   const breedLabel: Record<string, string> = {
     "Local": "দেশি জাত", "Local Cross": "লোকাল ক্রস",
     "Local Large Cross": "বড় লোকাল ক্রস", "Friesian Cross": "ফ্রিজিয়ান ক্রস",
@@ -101,6 +149,10 @@ function calcQurbaniEstimate(
   const appearanceLabel = appearance === "premium"
     ? "সুন্দর রঙ ও কুঁজ থাকায় সৌন্দর্য প্রিমিয়াম যোগ হয়েছে"
     : "সাধারণ রঙ ও গড়নের কারণে সৌন্দর্য প্রিমিয়াম নেই";
+
+  // Actual cost per kg after cap
+  const actualCostPerKg = Math.round((priceRangeMin + priceRangeMax) / 2 / meatYieldKg);
+
   return {
     base_price_per_kg:   Math.round((effectiveMin + effectiveMax) / 2),
     base_value:          Math.round(midPrice),
@@ -115,7 +167,8 @@ function calcQurbaniEstimate(
     appearance_detected: appearance,
     explanation_bn:
       `${breedLabel[breed] ?? breed} জাতের গরু, আনুমানিক ${weightMid} কেজি। ` +
-      `${appearanceLabel}। ঈদের হাসিল ও পরিবহন ৳${eidPremium.toLocaleString()} যোগে মোট বাজার অনুমান।`,
+      `${appearanceLabel}। ঈদের হাসিল ও পরিবহন ৳${eidPremium.toLocaleString()} যোগে মোট হাট অনুমান। ` +
+      `প্রতি কেজি মাংসের প্রকৃত খরচ: ৳${actualCostPerKg.toLocaleString()}।`,
   };
 }
 
@@ -219,23 +272,41 @@ function calibrateWeight(
   }
 
   // Seller claim blending — only when plausibly close (within 35%)
-  if (sellerClaim !== undefined && sellerClaim > calMax) {
-    const overageRatio = sellerClaim / calMax;
-    if (overageRatio <= 1.35) {
-      const calMid     = (calMin + calMax) / 2;
-      const blendedMid = Math.round((calMid * 0.65 + sellerClaim * 0.35) / 10) * 10;
-      const halfRange  = Math.round((calMax - calMin) / 2 / 10) * 10;
-      finalMin = blendedMid - halfRange;
-      finalMax = blendedMid + halfRange;
-      note = note
-        ? note + " · বিক্রেতার দাবি বিবেচনায় সংশোধিত"
-        : "বিক্রেতার দাবি বিবেচনায় সংশোধিত অনুমান";
-    } else {
-      note = note
-        ? note + " · বিক্রেতার দাবি অনেক বেশি — সতর্ক থাকুন"
-        : "বিক্রেতার দাবি AI অনুমানের চেয়ে অনেক বেশি — সতর্ক থাকুন";
-    }
+if (sellerClaim !== undefined && sellerClaim > calMax) {
+
+  const overageRatio = sellerClaim / calMax;
+
+  if (overageRatio <= 1.35) {
+
+    const calMid =
+  (calMin + calMax) / 2;
+
+const blendedMid =
+  Math.round(
+    (calMid * 0.65 + sellerClaim * 0.35) / 10
+  ) * 10;
+
+// realistic haat spread
+const naturalSpread =
+  Math.max(8000, Math.round(calMid * 0.04));
+
+const halfRange =
+  Math.round(naturalSpread / 2 / 10) * 10;
+
+finalMin = blendedMid - halfRange;
+finalMax = blendedMid + halfRange;
+
+    note = note
+      ? note + " · বিক্রেতার দাবি বিবেচনায় সংশোধিত"
+      : "বিক্রেতার দাবি বিবেচনায় সংশোধিত অনুমান";
+
+  } else {
+
+    note = note
+      ? note + " · বিক্রেতার দাবি অনেক বেশি — সতর্ক থাকুন"
+      : "বিক্রেতার দাবি AI অনুমানের চেয়ে অনেক বেশি — সতর্ক থাকুন";
   }
+}
 
   const mid = Math.round((finalMin + finalMax) / 2 / 5) * 5;
 
@@ -352,16 +423,16 @@ function calcFraudRisk(
 }
 
 function getValueVerdict(costPerKgMeat: number, breed: string, weightCategory: string): string {
-  if (breed === "Friesian Cross" && costPerKgMeat < 1050)
+  if (breed === "Friesian Cross" && costPerKgMeat <= MARKET_MEAT_MAX)
     return "Friesian Cross — মাংসের অনুপাত কম, তবে দাম বাজারসম্মত।";
   if (breed === "Local")
     return "দেশি গরু — কোরবানিতে স্বাদ ও ঐতিহ্যের জন্য প্রিমিয়াম মূল্য স্বাভাবিক।";
-  if (weightCategory.startsWith("Small") && costPerKgMeat > 1050)
+  if (weightCategory.startsWith("Small") && costPerKgMeat > MARKET_MEAT_MAX)
     return "ছোট গরুতে প্রতি কেজি মাংসের খরচ কিছুটা বেশি — স্বাদ ভালো ও একা কেনা সুবিধাজনক।";
-  if (costPerKgMeat < 950)  return "প্রতি কেজি মাংসের হিসেবে চমৎকার মূল্য (৯৫০ টাকার নিচে)।";
-  if (costPerKgMeat <= 1000) return "প্রতি কেজি মাংস ৯৫০–১০০০ টাকা — বাজারের সেরা দাম।";
-  if (costPerKgMeat <= 1050) return "প্রতি কেজি মাংস ১০০০–১০৫০ টাকা — বাজারসম্মত মূল্য।";
-  return "প্রতি কেজি মাংসের খরচ ১০৫০ টাকার উপরে — ভালোভাবে দর কষাকষি করুন।";
+  if (costPerKgMeat < MARKET_MEAT_MIN)  return `প্রতি কেজি মাংসের হিসেবে চমৎকার মূল্য (${MARKET_MEAT_MIN} টাকার নিচে)।`;
+  if (costPerKgMeat <= MARKET_MEAT_TARGET) return `প্রতি কেজি মাংস ${MARKET_MEAT_MIN}–${MARKET_MEAT_TARGET} টাকা — বাজারের সেরা দাম।`;
+  if (costPerKgMeat <= MARKET_MEAT_MAX) return `প্রতি কেজি মাংস ${MARKET_MEAT_TARGET}–${MARKET_MEAT_MAX} টাকা — বাজারসম্মত মূল্য।`;
+  return `প্রতি কেজি মাংসের খরচ ${MARKET_MEAT_MAX} টাকার উপরে — ভালোভাবে দর কষাকষি করুন।`;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -381,9 +452,34 @@ function getValueVerdict(costPerKgMeat: number, breed: string, weightCategory: s
  * Returns adjusted { priceMin, priceMax, avgPrice,
  *   pricePerKgLive, costPerKgMeat, wasAdjusted, deductedAmount }
  */
-const MEAT_RATE_MIN    = 950;   // lower bound ৳/kg dressed meat
-const MEAT_RATE_MAX    = 1050;  // upper bound ৳/kg dressed meat
-const MEAT_RATE_TARGET = 1000;  // midpoint target
+// ── বাজার মূল্য (estimate_a) ─────────────────────────────────
+// Updated 2026: real Dhaka haat data shows 900–1100 ৳/kg dressed meat
+// for medium-large premium cattle. Old 1000 cap was over-deflating prices.
+const MARKET_MEAT_MIN    = 850;   // ৳/kg dressed meat — lower bound
+const MARKET_MEAT_MAX    = 1050;  // ৳/kg dressed meat — upper bound (raised from 1000)
+const MARKET_MEAT_TARGET = 925;   // midpoint ~(850+1100)/2
+
+/**
+ * Weight-based dynamic meat rate cap.
+ * Large cattle (600+ kg) command higher per-kg prices in haat.
+ * Small cattle are more price-sensitive.
+ */
+function getDynamicMeatRateCap(weightMid: number): { min: number; max: number; target: number } {
+  if (weightMid >= 650) return { min: 900, max: 1250, target: 1075 };
+  if (weightMid >= 500) return { min: 875, max: 1150, target: 1010 };
+  if (weightMid >= 380) return { min: 850, max: 1100, target: 975  };
+  return                       { min: 850, max: 1050, target: 950  };
+}
+
+// ── কোরবানি হাট (estimate_b) ─────────────────────────────────
+// Real 2026 Eid haat data: premium 600-800kg cattle sell at
+// 1100-1300 ৳/kg dressed meat. Raised cap from 1175 → 1350.
+const QURBANI_MEAT_MAX   = 1150;  // hard cap ৳/kg dressed meat
+
+// aliases used inside adjustToMarketMeatRate
+const MEAT_RATE_MIN    = MARKET_MEAT_MIN;
+const MEAT_RATE_MAX    = MARKET_MEAT_MAX;
+const MEAT_RATE_TARGET = MARKET_MEAT_TARGET;
 
 function adjustToMarketMeatRate(
   priceMin:     number,
@@ -399,11 +495,15 @@ function adjustToMarketMeatRate(
   wasAdjusted:    boolean;
   deductedAmount: number;
 } {
+  // Use dynamic caps based on cattle size
+  const { min: MEAT_RATE_MIN_DYN, max: MEAT_RATE_MAX_DYN, target: MEAT_RATE_TARGET_DYN } =
+    getDynamicMeatRateCap(weightMid);
+
   const origAvg         = (priceMin + priceMax) / 2;
   const origCostPerKg   = Math.round(origAvg / meatYieldKg);
 
   // Already within acceptable range → return as-is
-  if (origCostPerKg <= MEAT_RATE_MAX) {
+  if (origCostPerKg <= MEAT_RATE_MAX_DYN) {
     return {
       priceMin,
       priceMax,
@@ -415,17 +515,18 @@ function adjustToMarketMeatRate(
     };
   }
 
-  // Target average price so that costPerKgMeat = MEAT_RATE_TARGET
-  const targetAvg   = MEAT_RATE_TARGET * meatYieldKg;
+  // Target average price so that costPerKgMeat = MEAT_RATE_TARGET_DYN
+  const targetAvg   = MEAT_RATE_TARGET_DYN * meatYieldKg;
   const deducted    = Math.round(origAvg - targetAvg);
 
   // Keep the same spread (priceMax - priceMin), shift both down equally
   const spread      = priceMax - priceMin;
-  const newAvg      = Math.round(targetAvg / 500) * 500;
-  const newMin      = Math.round((newAvg - spread / 2) / 500) * 500;
+  // Use floor to guarantee costPerKgMeat stays ≤ MEAT_RATE_MAX_DYN
+  const newAvg      = Math.floor(targetAvg / 500) * 500;
+  const newMin      = Math.floor((newAvg - spread / 2) / 500) * 500;
   const newMax      = newMin + spread;
 
-  // Final cost-per-kg after adjustment (may land between 950–1050)
+  // Final cost-per-kg after adjustment
   const adjCostPerKg = Math.round(newAvg / meatYieldKg);
 
   return {
@@ -433,7 +534,7 @@ function adjustToMarketMeatRate(
     priceMax:       newMax,
     avgPrice:       newAvg,
     pricePerKgLive: Math.round(newAvg / weightMid),
-    costPerKgMeat:  Math.max(MEAT_RATE_MIN, Math.min(MEAT_RATE_MAX, adjCostPerKg)),
+    costPerKgMeat:  Math.max(MEAT_RATE_MIN_DYN, Math.min(MEAT_RATE_MAX_DYN, adjCostPerKg)),
     wasAdjusted:    true,
     deductedAmount: deducted,
   };
@@ -681,8 +782,8 @@ export async function POST(req: Request) {
       price_adjustment: adjusted.wasAdjusted ? {
         was_adjusted:    true,
         deducted_amount: adjusted.deductedAmount,
-        reason:          `প্রতি কেজি মাংসের খরচ ১০৫০ টাকার মধ্যে রাখতে ৳${adjusted.deductedAmount.toLocaleString()} কমানো হয়েছে`,
-        meat_rate_range: `৳${MEAT_RATE_MIN}–৳${MEAT_RATE_MAX}/কেজি`,
+        reason:          `প্রতি কেজি মাংসের খরচ বাজারসম্মত সীমার মধ্যে রাখতে ৳${adjusted.deductedAmount.toLocaleString()} কমানো হয়েছে`,
+        meat_rate_range: `৳${MARKET_MEAT_MIN}–৳${MARKET_MEAT_MAX}/কেজি`,
       } : undefined,
 
       // Estimate A: Live rate model
@@ -694,6 +795,7 @@ export async function POST(req: Request) {
         price_max:         priceMax,
         price_per_kg_live: pricePerKgLive,
         cost_per_kg_meat:  costPerKgMeat,
+        meat_rate_range:   `৳${MARKET_MEAT_MIN}–৳${MARKET_MEAT_MAX}/কেজি`,
         value_verdict:     valueVerdict,
       },
 
@@ -709,6 +811,11 @@ export async function POST(req: Request) {
         price_range_min:     qurbani.price_range_min,
         price_range_max:     qurbani.price_range_max,
         price_range:         `৳${qurbani.price_range_min.toLocaleString()} – ৳${qurbani.price_range_max.toLocaleString()}`,
+        // Cost per kg of dressed (net) meat — used in UI bargaining tip and qurbani tab
+        cost_per_kg_meat:    Math.round(((qurbani.price_range_min + qurbani.price_range_max) / 2) / meatYieldKg),
+        cost_per_kg_meat_min: Math.round(qurbani.price_range_min / meatYieldKg),
+        cost_per_kg_meat_max: Math.round(qurbani.price_range_max / meatYieldKg),
+        meat_rate_cap:       QURBANI_MEAT_MAX,
         appearance_detected: qurbani.appearance_detected,
         explanation_bn:      qurbani.explanation_bn,
       },
@@ -729,10 +836,13 @@ export async function POST(req: Request) {
           dark_coat_factor:   getDarkCoatFactor(coatColor, (rawMin + rawMax) / 2),
           calibration_factor: calibrated.calibrationFactor,
           calibrated:         `${weightMin}-${weightMax} kg`,
-          raw_cost_per_kg:    Math.round(((rawPriceMin + rawPriceMax) / 2) / meatYieldKg),
-          adj_cost_per_kg:    costPerKgMeat,
-          price_adjusted:     adjusted.wasAdjusted,
-          deducted:           adjusted.wasAdjusted ? `৳${adjusted.deductedAmount.toLocaleString()}` : "none",
+          raw_cost_per_kg_market:   Math.round(((rawPriceMin + rawPriceMax) / 2) / meatYieldKg),
+          adj_cost_per_kg_market:   costPerKgMeat,
+          market_rate_range:        `৳${MARKET_MEAT_MIN}–৳${MARKET_MEAT_MAX}/kg`,
+          qurbani_cost_per_kg:      Math.round(((qurbani.price_range_min + qurbani.price_range_max) / 2) / meatYieldKg),
+          qurbani_rate_cap:         `৳${QURBANI_MEAT_MAX}/kg`,
+          price_adjusted:           adjusted.wasAdjusted,
+          deducted:                 adjusted.wasAdjusted ? `৳${adjusted.deductedAmount.toLocaleString()}` : "none",
         },
       }),
     });
