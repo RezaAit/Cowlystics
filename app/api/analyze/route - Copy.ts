@@ -352,91 +352,16 @@ function calcFraudRisk(
 }
 
 function getValueVerdict(costPerKgMeat: number, breed: string, weightCategory: string): string {
-  if (breed === "Friesian Cross" && costPerKgMeat < 1050)
-    return "Friesian Cross — মাংসের অনুপাত কম, তবে দাম বাজারসম্মত।";
+  if (breed === "Friesian Cross" && costPerKgMeat < 1150)
+    return "Friesian Cross — মাংসের অনুপাত কম, তবে দাম ঠিক আছে।";
   if (breed === "Local")
     return "দেশি গরু — কোরবানিতে স্বাদ ও ঐতিহ্যের জন্য প্রিমিয়াম মূল্য স্বাভাবিক।";
-  if (weightCategory.startsWith("Small") && costPerKgMeat > 1050)
-    return "ছোট গরুতে প্রতি কেজি মাংসের খরচ কিছুটা বেশি — স্বাদ ভালো ও একা কেনা সুবিধাজনক।";
-  if (costPerKgMeat < 950)  return "প্রতি কেজি মাংসের হিসেবে চমৎকার মূল্য (৯৫০ টাকার নিচে)।";
-  if (costPerKgMeat <= 1000) return "প্রতি কেজি মাংস ৯৫০–১০০০ টাকা — বাজারের সেরা দাম।";
-  if (costPerKgMeat <= 1050) return "প্রতি কেজি মাংস ১০০০–১০৫০ টাকা — বাজারসম্মত মূল্য।";
-  return "প্রতি কেজি মাংসের খরচ ১০৫০ টাকার উপরে — ভালোভাবে দর কষাকষি করুন।";
-}
-
-// ═══════════════════════════════════════════════════════
-// SECTION 5b — MARKET-FRIENDLY PRICE ADJUSTER
-// Rule: if costPerKgMeat > 1050, deduct from final price
-// so that dressing meat cost lands in 950–1050 range.
-// ═══════════════════════════════════════════════════════
-
-/**
- * Adjust live-weight prices so that the implied
- * cost-per-kg-of-dressed-meat stays within 950–1050 ৳/kg.
- *
- * If costPerKgMeat is already ≤ 1050 → no change.
- * If costPerKgMeat > 1050 → scale down avgPrice until
- *   costPerKgMeat === TARGET_MEAT_RATE (1000 ৳/kg midpoint).
- *
- * Returns adjusted { priceMin, priceMax, avgPrice,
- *   pricePerKgLive, costPerKgMeat, wasAdjusted, deductedAmount }
- */
-const MEAT_RATE_MIN    = 950;   // lower bound ৳/kg dressed meat
-const MEAT_RATE_MAX    = 1050;  // upper bound ৳/kg dressed meat
-const MEAT_RATE_TARGET = 1000;  // midpoint target
-
-function adjustToMarketMeatRate(
-  priceMin:     number,
-  priceMax:     number,
-  meatYieldKg:  number,
-  weightMid:    number
-): {
-  priceMin:       number;
-  priceMax:       number;
-  avgPrice:       number;
-  pricePerKgLive: number;
-  costPerKgMeat:  number;
-  wasAdjusted:    boolean;
-  deductedAmount: number;
-} {
-  const origAvg         = (priceMin + priceMax) / 2;
-  const origCostPerKg   = Math.round(origAvg / meatYieldKg);
-
-  // Already within acceptable range → return as-is
-  if (origCostPerKg <= MEAT_RATE_MAX) {
-    return {
-      priceMin,
-      priceMax,
-      avgPrice:       origAvg,
-      pricePerKgLive: Math.round(origAvg / weightMid),
-      costPerKgMeat:  origCostPerKg,
-      wasAdjusted:    false,
-      deductedAmount: 0,
-    };
-  }
-
-  // Target average price so that costPerKgMeat = MEAT_RATE_TARGET
-  const targetAvg   = MEAT_RATE_TARGET * meatYieldKg;
-  const deducted    = Math.round(origAvg - targetAvg);
-
-  // Keep the same spread (priceMax - priceMin), shift both down equally
-  const spread      = priceMax - priceMin;
-  const newAvg      = Math.round(targetAvg / 500) * 500;
-  const newMin      = Math.round((newAvg - spread / 2) / 500) * 500;
-  const newMax      = newMin + spread;
-
-  // Final cost-per-kg after adjustment (may land between 950–1050)
-  const adjCostPerKg = Math.round(newAvg / meatYieldKg);
-
-  return {
-    priceMin:       newMin,
-    priceMax:       newMax,
-    avgPrice:       newAvg,
-    pricePerKgLive: Math.round(newAvg / weightMid),
-    costPerKgMeat:  Math.max(MEAT_RATE_MIN, Math.min(MEAT_RATE_MAX, adjCostPerKg)),
-    wasAdjusted:    true,
-    deductedAmount: deducted,
-  };
+  if (weightCategory.startsWith("Small") && costPerKgMeat > 1300)
+    return "ছোট গরুতে প্রতি কেজি মাংসের খরচ বেশি — স্বাদ ভালো ও একা কেনা সুবিধাজনক।";
+  if (costPerKgMeat < 1100) return "প্রতি কেজি মাংসের হিসেবে চমৎকার মূল্য।";
+  if (costPerKgMeat < 1250) return "মূল্য বাজার গড়ের মধ্যে আছে।";
+  if (costPerKgMeat < 1400) return "মূল্য কিছুটা বেশি — দর কষুন।";
+  return "প্রতি কেজি মাংসের খরচ বেশি — ভালোভাবে দর কষাকষি করুন।";
 }
 
 // ═══════════════════════════════════════════════════════
@@ -610,26 +535,16 @@ export async function POST(req: Request) {
     const { min: weightMin, max: weightMax, mid: weightMid } = calibrated;
 
     // ── Step 4: Market metrics ───────────────────────────
-    const rate            = MARKET_RATES[breed]   ?? MARKET_RATES["Local Cross"];
-    const dressing        = DRESSING_RATES[breed] ?? 0.42;
-    const meatYieldKg     = parseFloat((weightMid * dressing).toFixed(1));
-
-    // Raw prices from live-weight rate
-    const rawPriceMin     = Math.round((weightMid * rate.min) / 500) * 500;
-    const rawPriceMax     = Math.round((weightMid * rate.max) / 500) * 500;
-
-    // ── Market-friendly adjustment ────────────────────────
-    // If costPerKgMeat > 1050 ৳, deduct from price so final
-    // dressing-meat cost lands within 950–1050 ৳/kg range.
-    const adjusted        = adjustToMarketMeatRate(rawPriceMin, rawPriceMax, meatYieldKg, weightMid);
-    const priceMin        = adjusted.priceMin;
-    const priceMax        = adjusted.priceMax;
-    const avgPrice        = adjusted.avgPrice;
-    const pricePerKgLive  = adjusted.pricePerKgLive;
-    const costPerKgMeat   = adjusted.costPerKgMeat;
-
-    const weightCategory  = getWeightCategory(weightMid);
-    const valueVerdict    = getValueVerdict(costPerKgMeat, breed, weightCategory);
+    const rate           = MARKET_RATES[breed]    ?? MARKET_RATES["Local Cross"];
+    const dressing       = DRESSING_RATES[breed]  ?? 0.42;
+    const meatYieldKg    = parseFloat((weightMid * dressing).toFixed(1));
+    const priceMin       = Math.round((weightMid * rate.min) / 500) * 500;
+    const priceMax       = Math.round((weightMid * rate.max) / 500) * 500;
+    const avgPrice       = (priceMin + priceMax) / 2;
+    const pricePerKgLive = Math.round(avgPrice / weightMid);
+    const costPerKgMeat  = Math.round(avgPrice / meatYieldKg);
+    const weightCategory = getWeightCategory(weightMid);
+    const valueVerdict   = getValueVerdict(costPerKgMeat, breed, weightCategory);
 
     // ── Step 5: Qurbani estimate ─────────────────────────
     const qurbani = calcQurbaniEstimate(weightMid, breed, bodyCondition, appearance);
@@ -677,14 +592,6 @@ export async function POST(req: Request) {
       cost_per_kg_meat:  costPerKgMeat,
       value_verdict:     valueVerdict,
 
-      // Price adjustment metadata
-      price_adjustment: adjusted.wasAdjusted ? {
-        was_adjusted:    true,
-        deducted_amount: adjusted.deductedAmount,
-        reason:          `প্রতি কেজি মাংসের খরচ ১০৫০ টাকার মধ্যে রাখতে ৳${adjusted.deductedAmount.toLocaleString()} কমানো হয়েছে`,
-        meat_rate_range: `৳${MEAT_RATE_MIN}–৳${MEAT_RATE_MAX}/কেজি`,
-      } : undefined,
-
       // Estimate A: Live rate model
       estimate_a: {
         label:             "ক্যালিব্রেটেড বাজার মূল্য",
@@ -729,10 +636,6 @@ export async function POST(req: Request) {
           dark_coat_factor:   getDarkCoatFactor(coatColor, (rawMin + rawMax) / 2),
           calibration_factor: calibrated.calibrationFactor,
           calibrated:         `${weightMin}-${weightMax} kg`,
-          raw_cost_per_kg:    Math.round(((rawPriceMin + rawPriceMax) / 2) / meatYieldKg),
-          adj_cost_per_kg:    costPerKgMeat,
-          price_adjusted:     adjusted.wasAdjusted,
-          deducted:           adjusted.wasAdjusted ? `৳${adjusted.deductedAmount.toLocaleString()}` : "none",
         },
       }),
     });
