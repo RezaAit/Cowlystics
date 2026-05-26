@@ -617,6 +617,149 @@ appearance_category: exactly "premium" or "standard"
 hump_quality: "prominent" | "moderate" | "small"`;
 
 // ═══════════════════════════════════════════════════════
+// SECTION 6.5 — GEMINI MULTI-KEY ROTATION ENGINE
+// ═══════════════════════════════════════════════════════
+//
+// .env.local setup:
+//   GEMINI_KEYS=key1,key2,key3   ← comma-separated, any number of keys
+//   (fallback: GEMINI_API_KEY for single-key backward compat)
+//
+// Free tier limits per key:
+//   RPM : 12 req/min  → we switch at 10 (2 req safety margin)
+//   RPD : 1000 req/day → we switch at 950 (50 req safety margin)
+//
+// Strategy: in-process Map tracks per-key usage windows.
+//   Each Vercel serverless instance has its own Map (resets on cold start).
+//   Conservative limits ensure 429s are avoided even with partial tracking.
+
+interface KeyUsage {
+  minuteWindow: number;  // ms timestamp of current 1-min window start
+  minuteCount:  number;
+  dayWindow:    number;  // ms timestamp of current UTC-day start
+  dayCount:     number;
+}
+
+const _keyUsageMap = new Map<string, KeyUsage>();
+const RPM_LIMIT    = 10;   // switch before hitting 12
+const RPD_LIMIT    = 950;  // switch before hitting 1000
+
+function _getNowWindows(): { minuteStart: number; dayStart: number } {
+  const now         = Date.now();
+  const minuteStart = Math.floor(now / 60_000) * 60_000;
+  const d           = new Date(now);
+  const dayStart    = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return { minuteStart, dayStart };
+}
+
+function _getUsage(key: string): KeyUsage {
+  const { minuteStart, dayStart } = _getNowWindows();
+  const e = _keyUsageMap.get(key);
+  if (!e) return { minuteWindow: minuteStart, minuteCount: 0, dayWindow: dayStart, dayCount: 0 };
+  return {
+    minuteWindow: minuteStart,
+    minuteCount:  e.minuteWindow === minuteStart ? e.minuteCount : 0,
+    dayWindow:    dayStart,
+    dayCount:     e.dayWindow    === dayStart    ? e.dayCount    : 0,
+  };
+}
+
+function _recordUsage(key: string): void {
+  const u = _getUsage(key);
+  _keyUsageMap.set(key, { ...u, minuteCount: u.minuteCount + 1, dayCount: u.dayCount + 1 });
+}
+
+function _isAvailable(key: string): boolean {
+  const u = _getUsage(key);
+  return u.minuteCount < RPM_LIMIT && u.dayCount < RPD_LIMIT;
+}
+
+function _saturateMinute(key: string): void {
+  const u = _getUsage(key);
+  _keyUsageMap.set(key, { ...u, minuteCount: RPM_LIMIT });
+}
+
+function _saturateDay(key: string): void {
+  const u = _getUsage(key);
+  _keyUsageMap.set(key, { ...u, dayCount: RPD_LIMIT });
+}
+
+function _getKeys(): string[] {
+  const raw = process.env.GEMINI_KEYS ?? process.env.GEMINI_API_KEY ?? "";
+  return raw.split(",").map(k => k.trim()).filter(Boolean);
+}
+
+function _pickKey(): { key: string; index: number } | null {
+  const keys = _getKeys();
+  if (!keys.length) return null;
+  // First available key wins
+  for (let i = 0; i < keys.length; i++) {
+    if (_isAvailable(keys[i])) return { key: keys[i], index: i };
+  }
+  // All exhausted — pick least-used (graceful degradation)
+  let best = 0;
+  for (let i = 1; i < keys.length; i++) {
+    const ua = _getUsage(keys[i]);
+    const ub = _getUsage(keys[best]);
+    if (ua.dayCount < ub.dayCount || (ua.dayCount === ub.dayCount && ua.minuteCount < ub.minuteCount))
+      best = i;
+  }
+  return { key: keys[best], index: best };
+}
+
+async function callGeminiWithRotation(
+  primaryImage: string,
+  prompt:       string,
+): Promise<{ text: string; keyIndex: number }> {
+  const keys = _getKeys();
+  if (!keys.length) throw new Error("No Gemini API key configured");
+
+  const tried     = new Set<string>();
+  const maxTries  = Math.min(keys.length, 5);
+
+  for (let attempt = 0; attempt < maxTries; attempt++) {
+    const picked = _pickKey();
+    if (!picked || tried.has(picked.key)) break;
+    tried.add(picked.key);
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${picked.key}`,
+      {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          contents: [{ parts: [
+            { text: prompt },
+            { inline_data: { mime_type: "image/jpeg", data: primaryImage } },
+          ]}],
+          generationConfig: { temperature: 0.10, maxOutputTokens: 400 },
+        }),
+      }
+    );
+
+    if (res.status === 429) {
+      _saturateMinute(picked.key);
+      console.warn(`[Cowlytics] Key[${picked.index}] 429 — rotating to next`);
+      continue;
+    }
+    if (res.status === 403 || res.status === 401) {
+      _saturateDay(picked.key);
+      console.warn(`[Cowlytics] Key[${picked.index}] auth error ${res.status} — skipping`);
+      continue;
+    }
+    if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+
+    _recordUsage(picked.key);
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+    const u    = _getUsage(picked.key);
+    console.info(`[Cowlytics] Key[${picked.index}] ok — rpm:${u.minuteCount}/${RPM_LIMIT} rpd:${u.dayCount}/${RPD_LIMIT}`);
+    return { text, keyIndex: picked.index };
+  }
+
+  throw new Error("All Gemini keys exhausted or rate-limited. Retry in 1 minute.");
+}
+
+// ═══════════════════════════════════════════════════════
 // SECTION 7 — API HANDLER
 // ═══════════════════════════════════════════════════════
 
@@ -635,35 +778,27 @@ export async function POST(req: Request) {
     }
 
     const primaryImage = imageList[0];
-    if (!process.env.GEMINI_API_KEY) {
+
+    // ── Validate keys configured ─────────────────────────
+    if (!process.env.GEMINI_KEYS && !process.env.GEMINI_API_KEY) {
       return NextResponse.json({ error: "API key কনফিগার করা নেই।" }, { status: 500 });
     }
 
-    // ── Step 1: Gemini visual analysis ──────────────────
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: GEMINI_PROMPT },
-              { inline_data: { mime_type: "image/jpeg", data: primaryImage } },
-            ],
-          }],
-          generationConfig: { temperature: 0.10, maxOutputTokens: 400 },
-        }),
+    // ── Step 1: Gemini visual analysis (with key rotation) ──
+    let cleaned: string;
+    try {
+      const { text } = await callGeminiWithRotation(primaryImage, GEMINI_PROMPT);
+      cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("exhausted") || msg.includes("rate-limit") || msg.includes("Retry")) {
+        return NextResponse.json(
+          { error: "AI সাময়িকভাবে ব্যস্ত। ১ মিনিট পর আবার চেষ্টা করুন।" },
+          { status: 429 }
+        );
       }
-    );
-
-    if (!geminiRes.ok) {
-      return NextResponse.json({ error: `AI Error ${geminiRes.status}` }, { status: 502 });
+      return NextResponse.json({ error: `AI Error: ${msg}` }, { status: 502 });
     }
-
-    const geminiData = await geminiRes.json();
-    const rawText    = geminiData?.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
-    const cleaned    = rawText.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
 
     let ai: {
       estimated_weight?:    string;
