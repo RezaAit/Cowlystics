@@ -106,7 +106,7 @@ export default function AdminPage() {
   };
 
   const whatsappText = (k: GeneratedKey) =>
-    `🐄 *Cowlytics Premium Key*\n\nআপনার license key:\n*${k.key}*\n\nধরন: ${TYPE_INFO[k.type]?.label}\nমেয়াদ: ${k.expiryLabel}\n\nActivate করুন:\nhttps://cowlytics.com/unlock`;
+    `🐄 *Cowlytics Premium Key*\n\nআপনার license key:\n*${k.key}*\n\nধরন: ${TYPE_INFO[k.type]?.label}\nমেয়াদ: ${k.expiryLabel}\n\nActivate করুন:\nhttps://cowly.net.bd/unlock`;
 
   // ── Login Screen ────────────────────────────────────────────────────
   if (!authed) {

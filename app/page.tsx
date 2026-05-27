@@ -68,7 +68,7 @@ interface HistoryEntry {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_LIMIT    = 3;
+const FREE_LIMIT    = 2;
 const DB_NAME       = "cowlytics_db";
 const DB_VERSION    = 2;           // bumped: adds "premium" store
 const STORE_USAGE   = "usage";
@@ -279,198 +279,637 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-async function downloadShareCard(result: AnalysisResult, cattleDataUrl: string): Promise<void> {
-  // ── Canvas setup: 1200×630 (Facebook OG optimal) ─────────────────
-  const W = 1200, H = 630;
+// ── Builds the 1200×630 share card canvas and returns it ─────────────────────
+async function buildShareCanvas(
+  result: AnalysisResult,
+  cattleDataUrl: string
+): Promise<HTMLCanvasElement> {
+
+  const W = 1200;
+  const H = 630;
+
   const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
-  const ctx = canvas.getContext("2d");
 
-  // ── 1. Solid dark background ──────────────────────────────────────
-  ctx.fillStyle = "#06080B";
+  canvas.width = W;
+  canvas.height = H;
+
+  const ctx = canvas.getContext("2d")!;
+
+  // =====================================================
+  // HELPERS
+  // =====================================================
+
+  const rr = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    r: number
+  ) => {
+
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, r);
+
+  };
+
+  const card = (
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius = 24,
+    fill = "#041018",
+    stroke = "rgba(16,185,129,0.16)"
+  ) => {
+
+    rr(x, y, w, h, radius);
+
+    ctx.fillStyle = fill;
+    ctx.fill();
+
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+
+    ctx.stroke();
+
+  };
+
+  // =====================================================
+  // BACKGROUND
+  // =====================================================
+
+  const bg = ctx.createLinearGradient(
+    0,
+    0,
+    W,
+    H
+  );
+
+  bg.addColorStop(0, "#010409");
+  bg.addColorStop(1, "#04121A");
+
+  ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  // ── 2. RIGHT: cowly.png — full height, no opacity reduction ───────
-  //    Anchored to right edge, fills full card height
-  const RIGHT_W = 480;  // how much of the right side cowly.png occupies
+  // =====================================================
+  // LAYOUT
+  // =====================================================
+
+  const GAP = 14;
+
+  const LEFT_X = 16;
+  const LEFT_Y = 16;
+
+  const LEFT_W = 585;
+  const LEFT_H = 560;
+
+  const RIGHT_X = LEFT_X + LEFT_W + GAP;
+  const RIGHT_W = W - RIGHT_X - 16;
+
+  // =====================================================
+  // LEFT IMAGE CARD
+  // =====================================================
+
+  card(
+    LEFT_X,
+    LEFT_Y,
+    LEFT_W,
+    LEFT_H,
+    28,
+    "#020A10"
+  );
+
+  // image
+  const IMG_PAD = 12;
+
+  const IMG_X = LEFT_X + IMG_PAD;
+  const IMG_Y = LEFT_Y + IMG_PAD;
+
+  const IMG_W = LEFT_W - IMG_PAD * 2;
+  const IMG_H = 420;
+
   try {
-    const cowlyImg = await loadImage("/cowly.png");
-    const imgH = H;
-    const imgW = (cowlyImg.width / cowlyImg.height) * imgH;
-    const imgX = W - imgW + (imgW - RIGHT_W) * 0.1; // anchor right, slight bleed left
-    // Draw full opacity — no globalAlpha
-    ctx.drawImage(cowlyImg, imgX, 0, imgW, imgH);
-  } catch { /* no cowly.png */ }
 
-  // Gradient overlay: fade cowly.png into dark on the left side
-  // So info text is readable but cowly is vivid on the far right
-  const fadeGrad = ctx.createLinearGradient(0, 0, W, 0);
-  fadeGrad.addColorStop(0,    "#06080B");
-  fadeGrad.addColorStop(0.36, "#06080B");
-  fadeGrad.addColorStop(0.55, "rgba(6,8,11,0.92)");
-  fadeGrad.addColorStop(0.72, "rgba(6,8,11,0.55)");
-  fadeGrad.addColorStop(1,    "rgba(6,8,11,0.10)");
-  ctx.fillStyle = fadeGrad;
-  ctx.fillRect(0, 0, W, H);
+    const img = await loadImage(
+      cattleDataUrl
+    );
 
-  // Subtle green glow — top left corner only
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, 420);
-  glow.addColorStop(0, "rgba(16,185,129,0.13)");
-  glow.addColorStop(1, "transparent");
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, W, H);
+    const scale = Math.max(
+      IMG_W / img.width,
+      IMG_H / img.height
+    );
 
-  // ── 3. LEFT: cattle photo — square panel, left-anchored ──────────
-  const PX = 24, PY = 24, PW = 420, PH = H - 48;
+    const dw = img.width * scale;
+    const dh = img.height * scale;
 
-  // Subtle card bg
-  ctx.fillStyle = "rgba(255,255,255,0.03)";
-  ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.fill();
+    const dx =
+      IMG_X + (IMG_W - dw) / 2;
 
-  try {
-    const cowImg = await loadImage(cattleDataUrl);
-    const scale  = Math.min((PW - 16) / cowImg.width, (PH - 16) / cowImg.height);
-    const dw = cowImg.width * scale, dh = cowImg.height * scale;
-    const dx = PX + (PW - dw) / 2, dy = PY + (PH - dh) / 2;
+    const dy =
+      IMG_Y + (IMG_H - dh) / 2;
+
     ctx.save();
-    ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.clip();
-    ctx.drawImage(cowImg, dx, dy, dw, dh);
+
+    rr(
+      IMG_X,
+      IMG_Y,
+      IMG_W,
+      IMG_H,
+      22
+    );
+
+    ctx.clip();
+
+    ctx.drawImage(
+      img,
+      dx,
+      dy,
+      dw,
+      dh
+    );
+
     ctx.restore();
-  } catch { /* dark panel */ }
 
-  // Border
-  ctx.strokeStyle = "rgba(16,185,129,0.4)";
-  ctx.lineWidth = 1.5;
-  ctx.beginPath(); ctx.roundRect(PX, PY, PW, PH, 16); ctx.stroke();
-
-  // ── 4. INFO column: right of cattle photo, left of cowly ─────────
-  const IX = PX + PW + 24;   // info start x
-  const IW = 680 - IX + PX;  // info width (~280px) — fits between photo & cowly
-  let   IY = 32;
-
-  ctx.textAlign = "left";
-
-  // ── Logo ──────────────────────────────────────────────────────────
-  let logoLoaded = false;
-  try {
-    const logoImg = await loadImage("/logo.png");
-    const lh = 44, lw = (logoImg.width / logoImg.height) * lh;
-    ctx.drawImage(logoImg, IX, IY, lw, lh);
-    logoLoaded = true; IY += lh + 8;
   } catch {}
-  if (!logoLoaded) {
-    ctx.font = "bold 22px 'Segoe UI',Arial,sans-serif";
-    ctx.fillStyle = "#10B981";
-    ctx.fillText("Cowlytics", IX, IY + 22); IY += 34;
-  }
 
-  // URL tagline
-  ctx.font = "500 11px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(16,185,129,0.65)";
-  ctx.fillText("cowly.ait.net.bd", IX, IY); IY += 11;
+  // image fade
+  const fade = ctx.createLinearGradient(
+    0,
+    IMG_Y + IMG_H - 120,
+    0,
+    IMG_Y + IMG_H
+  );
 
-  // Divider
-  ctx.fillStyle = "rgba(16,185,129,0.5)";
-  ctx.fillRect(IX, IY, IW, 1.5); IY += 12;
+  fade.addColorStop(
+    0,
+    "transparent"
+  );
 
-  // ── Breed ─────────────────────────────────────────────────────────
-  const breedLabel = BREED_LABELS[result.breed] ?? result.breed;
-  ctx.font = "bold 18px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "#D8E6EE";
-  ctx.fillText(breedLabel, IX, IY);
-  if (result.appearance === "premium") {
-    const bw = ctx.measureText(breedLabel).width;
-    ctx.font = "bold 12px 'Segoe UI',Arial,sans-serif";
-    ctx.fillStyle = "#FBBF24";
-    ctx.fillText("  \u2b50 Premium", IX + bw, IY);
-  }
-  IY += 13;
-  ctx.font = "11px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "#10B981";
-  ctx.fillText("  " + result.body_condition, IX, IY); IY += 18;
+  fade.addColorStop(
+    1,
+    "rgba(0,0,0,0.95)"
+  );
 
-  // ── Weight hero ───────────────────────────────────────────────────
-  ctx.font = "bold 52px 'Segoe UI',Arial,sans-serif";
-  const wGrad = ctx.createLinearGradient(IX, 0, IX + IW, 0);
-  wGrad.addColorStop(0, "#FFFFFF"); wGrad.addColorStop(1, "#10B981");
-  ctx.fillStyle = wGrad;
-  ctx.fillText(result.estimated_weight, IX, IY + 48); IY += 54;
-  ctx.font = "11px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,0.30)";
-  ctx.fillText("\u0986\u09a8\u09c1\u09ae\u09be\u09a8\u09bf\u0995 \u0993\u099c\u09a8", IX, IY); IY += 16;
+  ctx.fillStyle = fade;
 
-  ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(IX, IY, IW, 1); IY += 12;
+  ctx.fillRect(
+    IMG_X,
+    IMG_Y + IMG_H - 120,
+    IMG_W,
+    120
+  );
 
-  // ── Meat ──────────────────────────────────────────────────────────
-  ctx.font = "bold 22px 'Segoe UI',Arial,sans-serif";
+  // =====================================================
+  // TOP ICON
+  // =====================================================
+
+  try {
+
+  const logo = await loadImage("/ait.png");
+
+  const size = 95;
+
+  const x = LEFT_X + 56;
+  const y = LEFT_Y + 56;
+  const r = size / 2;
+
+  ctx.save();
+
+  // 1. circle clip
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.clip();
+
+  // 2. draw image (cover style)
+  ctx.drawImage(
+    logo,
+    x - r,
+    y - r,
+    size,
+    size
+  );
+
+  ctx.restore();
+
+  // 3. optional border (nice UI)
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+} catch {}
+
+  // =====================================================
+  // LEFT BOTTOM WEIGHT AREA
+  // =====================================================
+
+  const weightGradient =
+    ctx.createLinearGradient(
+      0,
+      0,
+      420,
+      0
+    );
+
+  weightGradient.addColorStop(
+    0,
+    "#FFFFFF"
+  );
+
+  weightGradient.addColorStop(
+    1,
+    "#7CFF74"
+  );
+
+  ctx.textAlign = "left";
+
+  ctx.font =
+    "bold 18px 'Segoe UI', Arial";
+
+  ctx.fillStyle =
+    "rgba(255,255,255,0.72)";
+
+  ctx.fillText(
+    "ওজন (লাইভ ওয়েট)",
+    LEFT_X + 28,
+    490
+  );
+
+  ctx.font =
+    "bold 68px 'Segoe UI', Arial";
+
+  ctx.fillStyle = weightGradient;
+
+  ctx.fillText(
+    result.estimated_weight,
+    LEFT_X + 28,
+    555
+  );
+
+   // =====================================================
+  // RIGHT TOP PRICE CARD
+  // =====================================================
+
+  card(
+    RIGHT_X,
+    16,
+    RIGHT_W,
+    92,
+    24,
+    "#031018"
+  );
+
+  const pMin = (
+    result.estimate_b
+      ?.price_range_min ??
+    result.price_min
+  ).toLocaleString();
+
+  const pMax = (
+    result.estimate_b
+      ?.price_range_max ??
+    result.price_max
+  ).toLocaleString();
+
+  const priceGradient =
+    ctx.createLinearGradient(
+      RIGHT_X,
+      0,
+      RIGHT_X + RIGHT_W,
+      0
+    );
+
+  priceGradient.addColorStop(
+    0,
+    "#34D399"
+  );
+
+  priceGradient.addColorStop(
+    1,
+    "#00FF88"
+  );
+
+  ctx.textAlign = "center";
+
+  ctx.font =
+    "bold 42px 'Segoe UI', Arial";
+
+  ctx.fillStyle = priceGradient;
+
+  ctx.fillText(
+    `৳${pMin} – ৳${pMax}`,
+    RIGHT_X + RIGHT_W / 2,
+    72
+  );
+
+  // =====================================================
+  // CONFIDENCE CARD
+  // =====================================================
+
+  card(
+    RIGHT_X,
+    118,
+    RIGHT_W,
+    72,
+    20,
+    "#031018"
+  );
+
+  ctx.textAlign = "left";
+
+  ctx.font =
+    "bold 18px 'Segoe UI', Arial";
+
+  ctx.fillStyle = "#FBBF24";
+
+  ctx.fillText(
+    `AI নির্ভুলতা ${result.confidence}`,
+    RIGHT_X + 22,
+    148
+  );
+
+  // bar bg
+  rr(
+    RIGHT_X + 22,
+    164,
+    RIGHT_W - 44,
+    10,
+    8
+  );
+
+  ctx.fillStyle =
+    "rgba(255,255,255,0.10)";
+
+  ctx.fill();
+
+  // bar fill
+  const confColor =
+    result.confidence_score >= 80
+      ? "#4ADE80"
+      : result.confidence_score >= 70
+      ? "#FBBF24"
+      : "#EF4444";
+
+  rr(
+    RIGHT_X + 22,
+    164,
+    (RIGHT_W - 44) *
+      (result.confidence_score / 100),
+    10,
+    8
+  );
+
+  ctx.fillStyle = confColor;
+  ctx.fill();
+
+  // =====================================================
+  // RIGHT LOWER SECTION
+  // =====================================================
+
+  const LOWER_Y = 204;
+
+  const INFO_W = 178;
+
+  const BRAND_X =
+    RIGHT_X + INFO_W + GAP;
+
+  const BRAND_W =
+    RIGHT_W - INFO_W - GAP;
+
+  // =====================================================
+  // INFO CARD
+  // =====================================================
+
+  card(
+    RIGHT_X,
+    LOWER_Y,
+    INFO_W,
+    340,
+    22,
+    "#031018"
+  );
+
+  const breedLabel =
+    BREED_LABELS[result.breed] ??
+    result.breed;
+
+  let iy = LOWER_Y + 42;
+
+  ctx.font =
+    "bold 22px 'Segoe UI', Arial";
+
+  ctx.fillStyle = "#FFFFFF";
+
+  ctx.fillText(
+    breedLabel,
+    RIGHT_X + 20,
+    iy
+  );
+
+  // divider
+  ctx.strokeStyle =
+    "rgba(16,185,129,0.25)";
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    RIGHT_X + 20,
+    iy + 18
+  );
+
+  ctx.lineTo(
+    RIGHT_X + INFO_W - 20,
+    iy + 18
+  );
+
+  ctx.stroke();
+
+  iy += 72;
+
+  ctx.font =
+    "bold 15px 'Segoe UI', Arial";
+
+  ctx.fillStyle = "#FBBF24";
+
+  ctx.fillText(
+    "★ Premium",
+    RIGHT_X + 20,
+    iy
+  );
+
+  iy += 36;
+
+  ctx.fillStyle = "#00D084";
+
+  ctx.fillText(
+    "● " + result.body_condition,
+    RIGHT_X + 20,
+    iy
+  );
+
+  iy += 50;
+
+  ctx.beginPath();
+
+  ctx.moveTo(
+    RIGHT_X + 20,
+    iy
+  );
+
+  ctx.lineTo(
+    RIGHT_X + INFO_W - 20,
+    iy
+  );
+
+  ctx.stroke();
+
+  iy += 50; 
+
+  ctx.font =
+    "bold 34px Arial";
+
   ctx.fillStyle = "#F59E0B";
-  ctx.fillText("~" + Math.round(result.meat_yield_kg) + " \u0995\u09c7\u099c\u09bf \u09ae\u09be\u0982\u09b8", IX, IY); IY += 13;
-  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,0.28)";
-  ctx.fillText("\u09b9\u09be\u09dc-\u099a\u09b0\u09cd\u09ac\u09bf \u09ac\u09be\u09a6\u09c7 \u00b7 Dressing " + Math.round(result.dressing_rate * 100) + "%", IX, IY); IY += 16;
 
-  ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(IX, IY, IW, 1); IY += 12;
+  ctx.fillText(
+    "◔",
+    RIGHT_X + 20,
+    iy
+  );
 
-  // ── Price pill ────────────────────────────────────────────────────
-  const pMin = (result.estimate_b?.price_range_min ?? result.price_min).toLocaleString();
-  const pMax = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
-  const priceStr = "\u09f3" + pMin + " \u2013 \u09f3" + pMax;
+   ctx.font =
+    "bold 34px 'Segoe UI', Arial";
 
-  // pill bg
-  ctx.fillStyle = "rgba(16,185,129,0.12)";
-  ctx.strokeStyle = "rgba(16,185,129,0.35)";
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.roundRect(IX - 6, IY - 6, IW + 6, 48, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#FFB300";
+  
+  ctx.fillText(
+    `~${Math.round(result.meat_yield_kg)}`,
+    RIGHT_X + 50,
+    iy
+  );
 
-  ctx.font = "bold 26px 'Segoe UI',Arial,sans-serif";
-  if (ctx.measureText(priceStr).width > IW) ctx.font = "bold 20px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "#10B981";
-  ctx.fillText(priceStr, IX, IY + 22); IY += 32;
-  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(16,185,129,0.55)";
-  ctx.fillText("\u0995\u09cb\u09b0\u09ac\u09be\u09a8\u09bf \u09b9\u09be\u099f\u09c7\u09b0 \u09a8\u09cd\u09af\u09be\u09af\u09bc\u09cd\u09af \u09ae\u09c2\u09b2\u09cd\u09af \u09b8\u09c0\u09ae\u09be", IX, IY); IY += 16;
+  iy += 34;
 
-  // ── Confidence ────────────────────────────────────────────────────
-  const confColor = result.confidence_score >= 80 ? "#22c55e"
-    : result.confidence_score >= 70 ? "#f59e0b" : "#ef4444";
-  ctx.font = "bold 12px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = confColor;
-  ctx.fillText("AI \u09a8\u09bf\u09b0\u09cd\u09ad\u09b0\u09af\u09cb\u0997\u09cd\u09af\u09a4\u09be: " + result.confidence, IX, IY); IY += 10;
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  ctx.beginPath(); ctx.roundRect(IX, IY, IW, 4, 2); ctx.fill();
-  ctx.fillStyle = confColor;
-  ctx.beginPath(); ctx.roundRect(IX, IY, IW * (result.confidence_score / 100), 4, 2); ctx.fill();
-  IY += 14;
+  ctx.font =
+    "bold 22px 'Segoe UI', Arial";
 
-  // cost/kg
-  const cpkm = result.estimate_b?.cost_per_kg_meat ?? 0;
-  if (cpkm) {
-    ctx.font = "11px 'Segoe UI',Arial,sans-serif";
-    ctx.fillStyle = "rgba(245,158,11,0.75)";
-    ctx.fillText("\u09ae\u09be\u0982\u09b8 \u0996\u09b0\u099a: \u09f3" + cpkm.toLocaleString() + "/\u0995\u09c7\u099c\u09bf", IX, IY);
-  }
+  ctx.fillText(
+    "কেজি মাংস",
+    RIGHT_X + 20,
+    iy
+  );
 
-  // ── Bottom strip ──────────────────────────────────────────────────
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(0, H - 38, W, 38);
-  ctx.fillStyle = "rgba(16,185,129,0.45)";
-  ctx.fillRect(0, H - 38, W, 1.5);
+  iy += 42;
 
-  ctx.font = "10px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  ctx.font =
+    "18px 'Segoe UI', Arial";
+
+  ctx.fillStyle =
+    "rgba(255,255,255,0.70)";
+
+  ctx.fillText(
+    `Dressing ${Math.round(result.dressing_rate * 100)}%`,
+    RIGHT_X + 20,
+    iy
+  );
+
+  // =====================================================
+  // BRAND CARD
+  // =====================================================
+
+  card(
+    BRAND_X,
+    LOWER_Y,
+    BRAND_W,
+    340,
+    22,
+    "#ffffff"
+  );
+
+  try {
+
+    const brand =
+      await loadImage(
+        "/cowly.png"
+      );
+
+    // Contain fit — no padding, full visibility
+    const CARD_H = 340;
+    const scale = Math.min(
+      BRAND_W / brand.width,
+      CARD_H  / brand.height
+    );
+
+    const dw = brand.width  * scale;
+    const dh = brand.height * scale;
+
+    const dx = BRAND_X + (BRAND_W - dw) / 2;
+    const dy = LOWER_Y + (CARD_H  - dh) / 2;
+
+    // Clip to card boundary — nothing bleeds outside
+    ctx.save();
+    ctx.beginPath();
+    ctx.roundRect(BRAND_X, LOWER_Y, BRAND_W, CARD_H, 22);
+    ctx.clip();
+
+    ctx.drawImage(brand, dx, dy, dw, dh);
+
+    ctx.restore();
+
+  } catch {}
+
+  // =====================================================
+  // FOOTER
+  // =====================================================
+
+  card(
+    16,
+    590,
+    W - 32,
+    24,
+    12,
+    "#041018"
+  );
+
+  ctx.font =
+    "13px 'Segoe UI', Arial";
+
   ctx.textAlign = "left";
-  ctx.fillText("* AI \u0985\u09a8\u09c1\u09ae\u09be\u09a8 \u09ad\u09bf\u09a4\u09cd\u09a4\u09bf\u0995\u0964 \u099a\u09c2\u09dc\u09be\u09a8\u09cd\u09a4 \u09b8\u09bf\u09a6\u09cd\u09a7\u09be\u09a8\u09cd\u09a4\u09c7 \u09ac\u09bf\u09b6\u09c7\u09b7\u099c\u09cd\u099e\u09c7\u09b0 \u09aa\u09b0\u09be\u09ae\u09b0\u09cd\u09b6 \u09a8\u09bf\u09a8\u0964", 24, H - 12);
-  ctx.font = "bold 11px 'Segoe UI',Arial,sans-serif";
-  ctx.fillStyle = "rgba(16,185,129,0.55)";
+
+  ctx.fillStyle =
+    "rgba(255,255,255,0.55)";
+
+  ctx.fillText(
+    "* AI অনুমান ভিত্তিক | চূড়ান্ত সিদ্ধান্তে বিশেষজ্ঞের পরামর্শ নিন",
+    28,
+    607
+  );
+
   ctx.textAlign = "right";
-  ctx.fillText("cowly.ait.net.bd", W - 20, H - 12);
-  ctx.textAlign = "left";
 
-  // ── Download ──────────────────────────────────────────────────────
-  const link = document.createElement("a");
-  link.download = "cowlytics-" + Date.now() + ".jpg";
-  link.href = canvas.toDataURL("image/jpeg", 0.95);
+  ctx.fillStyle = "#4ADE80";
+
+  ctx.font =
+    "bold 14px 'Segoe UI', Arial";
+
+  ctx.fillText(
+    "www.cowly.ait.net.bd",
+    W - 28,
+    607
+  );
+
+  return canvas;
+
+}
+// Download wrapper
+async function downloadShareCard(result: AnalysisResult, cattleDataUrl: string): Promise<HTMLCanvasElement> {
+  const canvas  = await buildShareCanvas(result, cattleDataUrl);
+  const link     = document.createElement("a");
+  link.download  = "cowlytics-" + Date.now() + ".jpg";
+  link.href      = canvas.toDataURL("image/jpeg", 0.95);
   link.click();
+  return canvas;
 }
 
 
@@ -496,6 +935,7 @@ export default function Home() {
 
   // Share
   const [shareLoading, setShareLoading] = useState(false);
+  const [shareToast, setShareToast]     = useState(false);
   // Track if current result was loaded from history (no live image available for share card)
   const [resultFromHistory, setResultFromHistory] = useState(false);
   const [historyThumb, setHistoryThumb]           = useState<string>("");
@@ -608,25 +1048,41 @@ export default function Home() {
     const cardImageUrl = images[0]?.dataUrl || historyThumb || "";
     setShareLoading(true);
     try {
-      // Step 1: Download the share card image
-      await downloadShareCard(result, cardImageUrl);
+      // Build canvas once — use for BOTH download and share
+      const canvas = await buildShareCanvas(result, cardImageUrl);
 
-      // Step 2: Small delay so download starts, then open Facebook share dialog
-      await new Promise(r => setTimeout(r, 800));
+      // Download
+      const link    = document.createElement("a");
+      link.download = "cowlytics-" + Date.now() + ".jpg";
+      link.href     = canvas.toDataURL("image/jpeg", 0.95);
+      link.click();
 
-      // Build a descriptive share text
-      const breed     = BREED_LABELS[result.breed] ?? result.breed;
-      const priceMin  = (result.estimate_b?.price_range_min ?? result.price_min).toLocaleString();
-      const priceMax  = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
-      const meatKg    = Math.round(result.meat_yield_kg);
-      const shareText = `🐄 Cowlytics AI বিশ্লেষণ\n\nজাত: ${breed}\nওজন: ${result.estimated_weight}\nমাংস: ~${meatKg} কেজি\nমূল্য: ৳${priceMin} – ৳${priceMax}\n\nগরু কিনুন বুঝে-শুনে 👇`;
-      const shareUrl  = "https://cowly.ait.net.bd";
+      // Try Web Share API with the SAME canvas blob (mobile)
+      if (typeof navigator.share === "function") {
+        const blob: Blob = await new Promise((res, rej) =>
+          canvas.toBlob(b => b ? res(b) : rej(new Error("blob fail")), "image/jpeg", 0.92)
+        );
+        const shareFile = new File([blob], "cowlytics.jpg", { type: "image/jpeg" });
 
-      // Facebook sharer — opens in popup
-      const fbUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}&quote=${encodeURIComponent(shareText)}`;
-      window.open(fbUrl, "_blank", "width=600,height=500,scrollbars=yes");
+        if (navigator.canShare?.({ files: [shareFile] })) {
+          const breed    = BREED_LABELS[result.breed] ?? result.breed;
+          const priceMin = (result.estimate_b?.price_range_min ?? result.price_min).toLocaleString();
+          const priceMax = (result.estimate_b?.price_range_max ?? result.price_max).toLocaleString();
+          await navigator.share({
+            title: "Cowlytics AI বিশ্লেষণ",
+            text:  `🐄 ${breed} — ${result.estimated_weight}\n💰 ৳${priceMin}–৳${priceMax}\n\nগরু কিনুন কাউলী দিয়ে  👇\ncowly.ait.net.bd`,
+            files: [shareFile],
+          });
+          return; // mobile share done
+        }
+      }
 
-    } catch {
+      // Desktop fallback — show toast
+      setShareToast(true);
+      setTimeout(() => setShareToast(false), 6000);
+
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") return;
       alert("শেয়ার কার্ড তৈরি হয়নি। আবার চেষ্টা করুন।");
     } finally {
       setShareLoading(false);
@@ -660,6 +1116,16 @@ export default function Home() {
   return (
     <main style={{ minHeight: "100vh", background: "#050A0E", color: "#E8EDF2", fontFamily: "'Segoe UI', system-ui, sans-serif", overflowX: "hidden" }}>
 
+      {/* ── Share toast (desktop) ─────────────────────────── */}
+      {shareToast && (
+        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", zIndex: 200, background: "#1877F2", color: "#fff", borderRadius: 14, padding: "14px 20px", boxShadow: "0 8px 32px rgba(0,0,0,0.4)", maxWidth: 340, width: "calc(100% - 40px)", textAlign: "center" }}>
+          <p style={{ fontWeight: 700, fontSize: 14, margin: "0 0 6px" }}>📥 কার্ড ডাউনলোড হয়েছে!</p>
+          <p style={{ fontSize: 12, margin: 0, opacity: 0.9, lineHeight: 1.5 }}>
+            Facebook খুলুন → Photo/Video বাটনে ক্লিক করুন → Downloads থেকে <strong>cowlytics.jpg</strong> বেছে নিন → Post করুন
+          </p>
+        </div>
+      )}
+
       {/* Ambient glow */}
       <div style={{ position: "fixed", inset: 0, background: "radial-gradient(ellipse 80% 50% at 50% -10%, rgba(16,185,129,0.12) 0%, transparent 60%)", pointerEvents: "none", zIndex: 0 }} />
 
@@ -677,7 +1143,7 @@ export default function Home() {
           <h1 style={{ fontSize: 36, fontWeight: 800, margin: "0 0 2px", letterSpacing: "-0.02em", background: "linear-gradient(135deg, #E8EDF2 0%, #10B981 100%)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
             Cowlytics
           </h1>
-          <p style={{ color: "#4B6070", fontSize: 11, margin: "0 0 6px", letterSpacing: "0.04em" }}>গরু কিনুন বুঝে-শুনে</p>
+          <p style={{ color: "#4B6070", fontSize: 11, margin: "0 0 6px", letterSpacing: "0.04em" }}>"ব্যাপারী ভাইজান, বুঝে-শুনে দাম চান 😊"</p>
           <p style={{ color: "#6B7E8A", fontSize: 13, marginTop: 0 }}>গরুর ছবি আপলোড করুন — AI বিশ্লেষণ দেখুন!</p>
 
           {/* History button */}
@@ -1101,7 +1567,7 @@ export default function Home() {
               <p style={{ fontSize: 11, color: "#6B7E8A", margin: "0 0 12px", lineHeight: 1.5 }}>
                 {resultFromHistory
                   ? "ইতিহাস থেকে লোড করা ফলাফল — শেয়ারের জন্য নতুন বিশ্লেষণ করুন।"
-                  : "① কার্ড ডাউনলোড হবে → ② Facebook খুলবে → ③ ছবি attach করে post করুন"}
+                  : "📱 Mobile: সরাসরি Facebook/WhatsApp-এ share হবে · 💻 Desktop: card download হবে"}
               </p>
               <button
                 onClick={handleShare}
@@ -1359,6 +1825,60 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {/* ── AIT Footer ───────────────────────────────────────────────────── */}
+      <footer style={{
+        marginTop: 32,
+        padding: "18px 20px",
+        borderTop: "1px solid rgba(255,255,255,0.06)",
+        background: "rgba(255,255,255,0.015)",
+        textAlign: "center",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 6,
+      }}>
+        {/* Logo row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/ait.png" alt="AIT" style={{ height: 28, width: 28, objectFit: "contain", borderRadius: 6 }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#A0ADB5", letterSpacing: "0.02em" }}>
+            A product of <span style={{ color: "#10B981" }}>AIT</span>
+          </span>
+        </div>
+
+        {/* Full name */}
+        <p style={{ fontSize: 11, color: "#4B6070", margin: 0 }}>
+          Authentic Intelligent Technology
+        </p>
+
+        {/* Divider */}
+        <div style={{ width: 40, height: 1, background: "rgba(16,185,129,0.25)", borderRadius: 2 }} />
+
+        {/* Links row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "center" }}>
+          <a
+            href="https://ait.nt.bd"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 11, color: "#10B981", textDecoration: "none", fontWeight: 600 }}
+          >
+            🌐 ait.nt.bd
+          </a>
+          <span style={{ color: "rgba(255,255,255,0.1)", fontSize: 10 }}>|</span>
+          <a
+            href="tel:+8801517145678"
+            style={{ fontSize: 11, color: "#A0ADB5", textDecoration: "none", display: "flex", alignItems: "center", gap: 4 }}
+          >
+            📞 <span style={{ fontWeight: 600, color: "#E8EDF2" }}>01517-145678</span>
+          </a>
+        </div>
+
+        {/* Disclaimer */}
+        <p style={{ fontSize: 9, color: "#3D4D57", margin: "4px 0 0", lineHeight: 1.5, maxWidth: 340 }}>
+          * AI আনুমানিক তথ্য। চূড়ান্ত সিদ্ধান্তে বিশেষজ্ঞের পরামর্শ নিন।
+        </p>
+      </footer>
 
     </main>
   );

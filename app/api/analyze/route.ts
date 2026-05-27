@@ -226,7 +226,11 @@ function getCombinedFactor(breed: string, rawMid: number): number {
   if (rawMid >= 480) return 1.02;
   if (rawMid >= 350) return 0.96;
   if (rawMid >= 220) return 1.00;
-  return 1.00;
+  // Small deshi (<220kg): new Gemini prompt overshoots due to reference anchoring.
+  // Prompt includes "176kg (small desi)" which pulls estimates UP for tiny cattle.
+  // Down-correction needed: ~8-12% overshoot observed.
+  if (rawMid >= 180) return 0.92;  // 180-219kg: 8% down
+  return 0.88;                     // <180kg: 12% down (very small deshi)
 }
 
 function calibrateWeight(
