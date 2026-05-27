@@ -247,6 +247,53 @@ function compressThumb(dataUrl: string): Promise<string> {
 
 // ─── File helpers ─────────────────────────────────────────────────────────────
 
+/**
+ * Compress an image File using the browser Canvas API before upload.
+ * Resizes to max 1200px on the longest side and re-encodes as JPEG @ 0.82 quality.
+ * Typical 4-8 MB camera shot → 300-600 KB, preserving enough detail for AI analysis.
+ */
+function compressImage(
+  file: File,
+  maxDimension = 1200,
+  quality = 0.82
+): Promise<{ dataUrl: string; base64: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+
+      // Scale down while preserving aspect ratio
+      let { width, height } = img;
+      if (width > height && width > maxDimension) {
+        height = Math.round((height * maxDimension) / width);
+        width  = maxDimension;
+      } else if (height > maxDimension) {
+        width  = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width  = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const dataUrl = canvas.toDataURL("image/jpeg", quality);
+      const base64  = dataUrl.split(",")[1];
+      resolve({ dataUrl, base64 });
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Image load failed"));
+    };
+
+    img.src = url;
+  });
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -955,16 +1002,23 @@ export default function Home() {
     setHistory(h);
   }, []);
 
-  // Add images
+  // Add images — compresses via Canvas API before storing (1200px max, JPEG 0.82)
   const addFiles = async (files: FileList | File[]) => {
     const arr   = Array.from(files).filter(f => f.type.startsWith("image/"));
     const toAdd = arr.slice(0, MAX_IMAGES - images.length);
     if (!toAdd.length) return;
     const newImages = await Promise.all(
-      toAdd.map(async (f) => ({
-        dataUrl: await fileToDataUrl(f),
-        base64:  await fileToBase64(f),
-      }))
+      toAdd.map(async (f) => {
+        try {
+          return await compressImage(f);
+        } catch {
+          // Fallback to raw file if canvas compression fails
+          return {
+            dataUrl: await fileToDataUrl(f),
+            base64:  await fileToBase64(f),
+          };
+        }
+      })
     );
     setImages(prev => [...prev, ...newImages].slice(0, MAX_IMAGES));
     setResult(null);
