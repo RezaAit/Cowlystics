@@ -68,7 +68,7 @@ interface HistoryEntry {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const FREE_LIMIT    = 2;
+const FREE_LIMIT    = 5;
 const DB_NAME       = "cowlytics_db";
 const DB_VERSION    = 2;           // bumped: adds "premium" store
 const STORE_USAGE   = "usage";
