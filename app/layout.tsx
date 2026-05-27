@@ -46,9 +46,12 @@ export const metadata: Metadata = {
 
   // ── Favicon ───────────────────────────────────────────────────
   icons: {
-    icon:  [{ url: "/logo.png", type: "image/png" }],
-    apple: [{ url: "/logo.png" }],
+    icon:  [{ url: "/icon-192.png", type: "image/png" }],
+    apple: [{ url: "/icon-192.png" }],
   },
+
+  // ── PWA Manifest ──────────────────────────────────────────────
+  manifest: "/manifest.json",
 
   // ── Extra meta ────────────────────────────────────────────────
   other: {
@@ -89,6 +92,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="website"    content="https://ait.net.bd" />
 
         {/* ── PWA ── */}
+        <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color"                           content="#10B981" />
         <meta name="mobile-web-app-capable"                content="yes" />
         <meta name="apple-mobile-web-app-capable"          content="yes" />
