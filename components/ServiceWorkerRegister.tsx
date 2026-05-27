@@ -2,13 +2,13 @@
 
 import { useEffect } from "react";
 
-export default function ServiceWorkerRegistration() {
+export default function ServiceWorkerRegister() {
   useEffect(() => {
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker
         .register("/sw.js", { scope: "/" })
-        .then((r) => console.log("[SW] registered", r.scope))
-        .catch((e) => console.warn("[SW] failed", e));
+        .then((reg) => console.log("SW registered:", reg.scope))
+        .catch((err) => console.error("SW registration failed:", err));
     }
   }, []);
 
