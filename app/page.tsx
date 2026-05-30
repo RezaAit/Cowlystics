@@ -1912,12 +1912,12 @@ export default function Home() {
         {/* Links row */}
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", justifyContent: "center" }}>
           <a
-            href="https://ait.nt.bd"
+            href="https://ait.net.bd"
             target="_blank"
             rel="noopener noreferrer"
             style={{ fontSize: 11, color: "#10B981", textDecoration: "none", fontWeight: 600 }}
           >
-            🌐 ait.nt.bd
+            🌐 ait.net.bd
           </a>
           <span style={{ color: "rgba(255,255,255,0.1)", fontSize: 10 }}>|</span>
           <a
